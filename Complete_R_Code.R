@@ -1,0 +1,5372 @@
+---
+  title: "Machine Learning and Near Infrared Hyperspectral Imaging in Detection of Fraud in Extra-Virgin Olive Oil: A Comparative Case with FTIR, UV-Vis Spectroscopy, Raman, and GC-MS"
+author: "Derick Malavi"
+format:
+  html:
+  css: style.css
+output: html
+---
+  
+ 
+### Load Installed Packages from the R Library for the Analysis
+
+warning = FALSE  
+suppressWarnings(suppressMessages({    
+  library(caret)    
+  library(ggplot2)    
+  library(dplyr)   
+  library(readxl)   
+  library(readr)    
+  library(pls)   
+  library(janitor)  
+  library(class)   
+  library(MLmetrics) 
+  library(MLeval)  
+  library(themis)  
+  library(ROSE) 
+  library(parallelly)
+  library(parallel)    
+  library(doParallel)    
+  library(foreach)    
+  library(pheatmap)   
+  library(mdatools)    
+  library(nnet)
+  library(e1071) 
+  library(FactoMineR)
+  library(doSNOW)
+  library(MASS)
+  library(factoextra)
+  library(xgboost)
+  library(rmarkdown)
+  library(knitr) 
+  library(officedown)
+  library(quarto)
+  library(gtsummary)
+  library(pander)
+  library(kernlab)}))
+
+
+#Load and Inspect Hyperspectral Imaging Data#
+  
+  
+#Load HSI spectra data
+hsi<-read_excel("HSI.xlsx")
+#Check dimensions
+dim(hsi)
+#We have 183 observations and 228 variables
+
+
+
+#Check a few of the column names
+colnames(hsi[,c(1:4)])
+#Check for any missing values
+anyNA(hsi)# There are no missing values
+
+
+
+#Considering that we are conducting a binary classification, we will remove some columns
+hsi<-hsi[,-c(1,3)]
+table(hsi$class_1)
+#convert class_1 to a factor
+hsi$class_1<-as.factor(hsi$class_1)
+#There are two classes: The oils are either pure/authentic or adulterated
+
+
+
+#Check whether the data is normalized. We want a value between 0 and 1
+print(paste('The max value is', max(hsi[,-c(1:4)]), 
+            'and the min value is', min(hsi[,-c(1:4)])))
+
+
+#Load and Inspect Raman Spectroscopy Data#
+  
+  
+#Load Raman spectra data
+raman<-read_excel("Raman.xlsx")
+#Check dimensions
+dim(raman)
+#We have 183 observations and 1404 variables
+
+
+
+#Bind the data to have the same columns as HSI data
+raman<-cbind(hsi[,c(1,2)],raman[,-c(1:3)])
+colnames(raman[,c(1:3)])#check whether the changes have been effected
+table(raman$class_1)#Check the class distribution
+class(raman$class_1)#ensure class_1 is a factor
+
+
+# Define the normalization function to have values of 0 and 1
+min_max_normalize <- function(x) {
+  return((x - min(x)) / (max(x) - min(x)))
+}
+raman<-min_max_normalize(raman[,-c(1:2)])
+print(paste('The max value is', max(raman[,-c(1:2)]), 'and the min value is', min(raman[,-c(1:2)])))
+anyNA(raman)
+dim(raman)
+
+
+#Load and Inspect FTIR Spectroscopy Data#
+  
+#Load FTIR spectra data
+ftir<-read_excel("FTIR.xlsx")
+#Check dimensions
+dim(ftir)
+#We have 183 observations and 919 variables
+
+
+
+#Bind the data to have the same columns as HSI data
+ftir<-cbind(hsi[,c(1,2)],ftir[,-c(1:3)])
+colnames(ftir[,c(1:3)])#check whether the changes have been effected
+table(ftir$class_1)#Check the class distribution
+class(ftir$class_1)#ensure class_1 is a factor
+print(paste('The max value is', max(ftir[,-c(1:2)]), 
+            'and the min value is', min(ftir[,-c(1:2)])))#The data is OK
+dim(ftir)
+
+
+#Load and Inspect UV-Vis Spectroscopy Data#
+  
+  
+#Load Uv-Vis spectra data
+uv_vis<-read_excel("UVVIS.xlsx")
+#Check dimensions
+dim(uv_vis)
+
+#Bind the data to have the same columns as HSI data
+uv_vis<-cbind(hsi[,c(1,2)],uv_vis[,-c(1:4)])
+colnames(uv_vis[,c(1:3)])#check whether the changes have been effected
+table(uv_vis$class_1)#Check the class distribution
+class(uv_vis$class_1)#ensure class_1 is a factor
+print(paste('The max value is', max(uv_vis[,-c(1:2)]), 
+            'and the min value is', min(uv_vis[,-c(1:2)])))#The data is OK
+dim(uv_vis)
+
+
+# Define the normalization function to have values of 0 and 1
+min_max_normalize <- function(x) {
+  return((x - min(x)) / (max(x) - min(x)))
+}
+uv_vis<-min_max_normalize(uv_vis[,-c(1:2)])
+print(paste('The max value is', max(uv_vis[,-c(1:2)]), 
+            'and the min value is', min(uv_vis[,-c(1:2)])))
+anyNA(uv_vis)
+dim(uv_vis)
+#There are 183 observations and 121 covariates
+
+
+#Load and Inspect GC-MS Data#
+  
+  
+#Load GC-MS data
+gc_ms<-read_excel("GC_MS.xlsx")
+#Check dimensions
+dim(gc_ms)
+gc_ms$class_1<-factor(gc_ms$class_1)#convert to factor
+
+
+# Define the normalization function to have values of 0 and 1
+min_max_normalize <- function(x) {
+  return((x - min(x)) / (max(x) - min(x)))
+}
+gc<-min_max_normalize(gc_ms[,-c(1:2)])
+print(paste('The max value is', max(gc), 'and the min value is', min(gc)))
+anyNA(gc_ms)
+gc_ms<-cbind(gc_ms[,c(1,2)],gc)
+
+
+## Unsupervised Learning
+
+### Exploratory Data Analysis by Principal Component Analysis (PCA)
+
+#### Run PCA
+
+
+hsi_pca<-PCA(hsi[,-c(1,2)],graph = F)#HSI data
+hsi_pca$eig[1:10,]#extracting the first 5 components' eigenvalues
+
+
+raman_pca<-PCA(raman[,-c(1,2)],graph = F)#Raman data
+raman_pca$eig[1:10,]#extract the first 5 components' eigenvalues
+
+
+ftir_pca<-PCA(ftir[,-c(1,2)],graph = F)#FTIR data
+ftir_pca$eig[1:10,]#extract the first 5 components' eigenvalues
+
+
+
+uv_vis_pca<-PCA(uv_vis[,-c(1,2)],graph = F)#UV-Vis data
+uv_vis_pca$eig[1:10,]#extract the first 5 components' eigenvalues
+
+
+gc_ms_pca<-PCA(gc_ms[,-c(1,2)],graph = F)#GC-MS data
+gc_ms_pca$eig[1:7,]
+
+
+#### Scree Plots
+
+#HSI#
+  
+  
+s1<-fviz_eig(hsi_pca, addlabels = TRUE, ylim = c(0, 90),xlim=c(1,5), 
+             main = 'HSI Scree Plot',barfill = "chocolate1",
+             hjust = 0.5,ncp = 9,ggtheme = theme_bw(),
+             xlab = "PCs", ylab = "% variance")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme(panel.grid = element_blank())
+print(s1)
+
+
+#Raman#
+  
+  
+s2<-fviz_eig(raman_pca, addlabels = TRUE, ylim = c(0, 60),
+             xlim=c(1,5),main = 'Raman Scree Plot',
+             barfill = "greenyellow",
+             hjust = 0.5,ncp = 20,
+             ggtheme = theme_bw(),xlab = "PCs",ylab = "% variance")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme(panel.grid = element_blank())
+print(s2)
+
+
+#FTIR#
+  
+  
+s3<-fviz_eig(ftir_pca, addlabels = TRUE, 
+             ylim = c(0, 90),xlim=c(1,5),
+             main = 'FTIR Scree Plot',
+             barfill = "dodgerblue1",hjust = 0.5,ncp = 7,
+             ggtheme = theme_bw(),xlab = "PCs", ylab = "% variance")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme(panel.grid = element_blank())
+print(s3)
+
+
+#Uv-Vis#
+  
+s4<-fviz_eig(uv_vis_pca, addlabels = TRUE, 
+             ylim = c(0, 90),xlim=c(1,5),
+             main = 'UV-Vis Scree Plot',
+             barfill = "goldenrod4",
+             hjust = 0.5,ncp = 15,
+             ggtheme = theme_bw(),xlab = "PCs", ylab = "% variance")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme(panel.grid = element_blank())
+print(s4)
+
+#Patch together the scree plots
+gridExtra::grid.arrange(s1,s2,s3,s4, nrow =2)
+
+
+#GC-MS#
+  
+  
+s5<-fviz_eig(gc_ms_pca, addlabels = TRUE, 
+             ylim = c(0, 40),main = 'GC-MS',
+             barfill = "lightblue",hjust = 0.5,
+             ncp = 8,ggtheme = theme_bw(),xlab = "PCs", ylab = "% variance")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme(panel.grid = element_blank())
+
+print(s5)
+
+
+### Visualization of PC Scores
+
+#HSI Data
+hsi_new<-as.data.frame(hsi_pca$ind$coord) #Extract the PCs
+colnames(hsi_new)<-c("PC_1","PC_2", "PC_3","PC_4","PC_5")
+hsi_new<-cbind(hsi[,c(1,2)],hsi_new)#Bind with the dependent variables
+head(hsi_new)
+
+
+
+#Raman Data
+raman_new<-as.data.frame(raman_pca$ind$coord) #Extract the PCs
+colnames(raman_new)<-c("PC_1","PC_2", "PC_3","PC_4","PC_5")
+raman_new<-cbind(hsi[,c(1,2)],raman_new)#Bind with the dependent variables
+head(raman_new)
+
+
+#FTIR Data
+ftir_new<-as.data.frame(ftir_pca$ind$coord) #Extract the PCs
+colnames(ftir_new)<-c("PC_1","PC_2", "PC_3","PC_4","PC_5")
+ftir_new<-cbind(hsi[,c(1,2)],ftir_new)#Bind with the dependent variables
+head(ftir_new)
+
+
+#Uv_Vis Data
+uvvis_new<-as.data.frame(uv_vis_pca$ind$coord) #Extract the PCs
+colnames(uvvis_new)<-c("PC_1","PC_2", "PC_3","PC_4","PC_5")
+uvvis_new<-cbind(hsi[,c(1,2)],uvvis_new)#Bind with the dependent variables
+head(uvvis_new)
+
+
+#GC-MS Data
+gc_new<-as.data.frame(gc_ms_pca$ind$coord) #Extract the PCs
+colnames(gc_new)<-c("PC_1","PC_2", "PC_3","PC_4","PC_5")
+gc_new<-cbind(gc_ms[,c(1,2)],gc_new)#Bind with the dependent variables
+head(gc_new)
+
+
+#### #PC Plots#
+
+
+# HSI PC Plot
+p1 <- hsi_new %>% 
+  ggplot(mapping = aes(x = PC_1, y = PC_2, 
+                       shape = class_1, color = perc_adulter)) +
+  geom_point() + 
+  labs(x = "PC1 (79.8%)", y = "PC2 (10.9%)",
+       title = "HSI PC Plot", 
+       shape = "Oil type", color = "Percent Adulteration") +
+  theme_bw() +
+  theme(
+    panel.border = element_rect(color = 'black', fill = NA),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(color = 'black', size = 10),
+    axis.text.y = element_text(color = 'black', size = 10), 
+    aspect.ratio = 1,
+    axis.title.x = element_text(size = 9),
+    axis.title.y = element_text(size = 9),
+    plot.title = element_text(size = 9, hjust = 0.5),
+    legend.title = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.position = "none") +
+  scale_color_gradient(low = "#000000", high = "red") +
+  stat_ellipse(aes(group = class_1), 
+               level = 0.95, 
+               geom = "polygon", alpha = 0.2,
+               color = 'black', linewidth = 0.6)
+
+
+
+#Raman Plot
+p2 <- raman_new %>% 
+  ggplot(mapping = aes(x = PC_2, y = PC_3, 
+                       shape = class_1, color = perc_adulter)) +
+  geom_point() + 
+  labs(x = "PC2 (17.1%)", y = "PC3 (10.7%)",
+       title = "Raman PC Plot", 
+       shape = "Oil type", color = "Percent Adulteration") +
+  theme_bw() +
+  theme(
+    panel.border = element_rect(color = 'black', fill = NA),
+    axis.text.x = element_text(color = 'black', size = 10),
+    panel.grid = element_blank(),
+    axis.text.y = element_text(color = 'black', size = 10), 
+    aspect.ratio = 1,
+    axis.title.x = element_text(size = 9),
+    axis.title.y = element_text(size = 9),
+    plot.title = element_text(size = 9, hjust = 0.5),
+    legend.title = element_text(size = 7),
+    legend.text = element_text(size = 6)) +
+  scale_color_gradient(low = "#000000", high = "red") +
+  stat_ellipse(aes(group = class_1), 
+               level = 0.95, 
+               geom = "polygon", alpha = 0.2,
+               color = 'black', linewidth = 0.6)
+
+
+#FTIR Plot
+p3 <- ftir_new %>% 
+  ggplot(mapping = aes(x = PC_2, y = PC_3, 
+                       shape = class_1, color = perc_adulter)) +
+  geom_point() + 
+  labs(x = "PC2 (10.9%)", y = "PC3 (7.0%)",
+       title = "FTIR PC Plot", 
+       shape = "Oil type", color = "Percent Adulteration") +
+  theme_bw() +
+  theme(
+    panel.border = element_rect(color = 'black', fill = NA),
+    axis.text.x = element_text(color = 'black', size = 10),
+    panel.grid = element_blank(),
+    axis.text.y = element_text(color = 'black', size = 10), 
+    aspect.ratio = 1,
+    axis.title.x = element_text(size = 9),
+    axis.title.y = element_text(size = 9),
+    plot.title = element_text(size = 9, hjust = 0.5),
+    legend.title = element_text(size = 7),
+    legend.text = element_text(size = 6),
+    legend.position = "none") +
+  scale_color_gradient(low = "#000000", high = "red") +
+  stat_ellipse(aes(group = class_1), 
+               level = 0.95, 
+               geom = "polygon", alpha = 0.2,
+               color = 'black', linewidth = 0.6)
+
+
+
+#Uv_Vis Plot
+p4 <- uvvis_new%>% 
+  ggplot(mapping = aes(x = PC_1, y = PC_2, 
+                       shape = class_1, color = perc_adulter)) +
+  geom_point() + 
+  labs(x = "PC1 (74.5%)", y = "PC2 (11.7%)",
+       title = "Uv_Vis PC Plot", 
+       shape = "Oil type", color = "Percent Adulteration") +
+  theme_bw() +
+  theme(
+    panel.border = element_rect(color = 'black', fill = NA),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(color = 'black', size = 10),
+    axis.text.y = element_text(color = 'black', size = 10), 
+    aspect.ratio = 1,
+    axis.title.x = element_text(size = 9),
+    axis.title.y = element_text(size = 9),
+    plot.title = element_text(size = 9, hjust = 0.5),
+    legend.title = element_text(size = 7),
+    legend.text = element_text(size = 6)) +
+  scale_color_gradient(low = "#000000", high = "red") +
+  stat_ellipse(aes(group = class_1), 
+               level = 0.95, 
+               geom = "polygon", alpha = 0.2,
+               color = 'black', linewidth = 0.6)
+
+
+#### #Patch the PC Plots together#
+
+
+suppressWarnings(suppressMessages(library(gridExtra)))
+grid.arrange(p1,p2,p3,p4, nrow = 2)
+
+#GC-MS Plot
+p5 <- gc_new %>% 
+  ggplot(mapping = aes(x = PC_1, y = PC_2, 
+                       shape = class_1, color = perc_adulter)) +
+  geom_point() + 
+  labs(x = "PC1 (39.3%)", y = "PC2 (18.5%)",
+       title = "GC-MS PC Plot", 
+       shape = "Oil type", color = "Percent Adulteration") +
+  theme_bw() +
+  theme(
+    panel.border = element_rect(color = 'black', fill = NA),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(color = 'black', size = 10),
+    axis.text.y = element_text(color = 'black', size = 10), 
+    aspect.ratio = 1,
+    axis.title.x = element_text(size = 9),
+    axis.title.y = element_text(size = 9),
+    plot.title = element_text(size = 9, hjust = 0.5),
+    legend.title = element_text(size = 7),
+    legend.text = element_text(size = 6)) +
+  scale_color_gradient(low = "#000000", high = "red") +
+  stat_ellipse(aes(group = class_1), 
+               level = 0.95, 
+               geom = "polygon", alpha = 0.2,
+               color = 'black', linewidth = 0.6)
+#Display plot
+p5
+
+
+### PCA Insights
+
+
+### PC variable contributions
+
+#HSI
+h1<-fviz_contrib(hsi_pca, choice = "var", 
+                 top = 5,axes = 1, sort.val = 'desc', fill = "olivedrab")
+h2<-fviz_contrib(hsi_pca, choice = "var", 
+                 top = 5,axes = 2, sort.val = 'desc', fill = "cadetblue")
+grid.arrange(h1,h2, nrow = 1)
+
+
+
+#Raman
+r1<-fviz_contrib(raman_pca, choice = "var",
+                 top = 5,axes = 1, sort.val = 'desc', fill = "#E7B800")
+r2<-fviz_contrib(raman_pca, choice = "var",
+                 top = 5,axes = 2, sort.val = 'desc', fill = "#00AFBB")
+grid.arrange(r1,r2, nrow = 1)
+
+
+#FTIR
+f1<-fviz_contrib(ftir_pca, choice = "var", 
+                 top = 5,axes = 1, sort.val = 'desc', fill = "tan4")
+f2<-fviz_contrib(ftir_pca, choice = "var",
+                 top = 5,axes = 2, sort.val = 'desc', fill = "cornflowerblue")
+grid.arrange(f1,f2, nrow = 1)
+
+
+
+#Uv-Vis
+uv1<-fviz_contrib(uv_vis_pca, choice = "var", 
+                  top = 5,axes = 1, sort.val = 'desc', fill = "thistle")
+uv2<-fviz_contrib(uv_vis_pca, choice = "var", 
+                  top = 5,axes = 2, sort.val = 'desc', fill = "powderblue")
+grid.arrange(uv1,uv2, nrow = 1)
+
+
+
+#GC-MS
+gc1<-fviz_contrib(gc_ms_pca, choice = "var", 
+                  top = 5,axes = 1, sort.val = 'desc', fill = "chocolate")
+gc2<-fviz_contrib(gc_ms_pca, choice = "var", 
+                  top = 5,axes = 2, sort.val = 'desc', fill = "gray58")
+grid.arrange(gc1,gc2, nrow = 1)
+
+
+### K-Means Clustering
+
+#Let us find the number of clusters based on silhoutte method
+
+
+# optimal number of clusters for HSI
+hsi_clust<-fviz_nbclust(hsi[,-c(1:2)], kmeans, method = "silhouette", k.max=10)
+print(hsi_clust)
+
+
+
+# optimal number of clusters for Raman
+raman_clust<-fviz_nbclust(raman, kmeans, method = "silhouette", k.max=10)
+print(raman_clust)
+
+
+
+#optimal number of clusters for FTIR
+ftir_clust<-fviz_nbclust(ftir[,-c(1,2)], kmeans, method = "silhouette", k.max=10)
+print(ftir_clust)
+
+
+
+#optimal number of clusters for UV-Vis
+uvvis_clust<-fviz_nbclust(uv_vis, kmeans, method = "silhouette", k.max=10)
+plot(uvvis_clust)
+
+
+
+#optimal number of clusters for gc-ms
+gc_clust<-fviz_nbclust(gc, kmeans, method = "silhouette", k.max=10)
+print(gc_clust)
+
+
+-   Then #let us perform k-means clustering with the optimal number of clusters#
+  
+  
+#HSI k-means analysis and plots
+
+hsi_kmeans <- kmeans(hsi[,-c(1,2)],2)
+cluster<-  hsi_kmeans$cluster
+hsi_k_data <-cbind(hsi_new,cluster)
+hsi_k_data$cluster<-as.factor(hsi_k_data$cluster)
+
+hsi_k_data %>% 
+  ggplot(mapping = aes(x = PC_1, y = PC_2, color = cluster, shape = class_1)) +
+  geom_point() + 
+  labs(x = "PC1", y = "PC2",title = "HSI k-means cluster Plot")+
+  theme_bw() +
+  theme(
+    panel.border = element_rect(color = 'black', fill = NA),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(color = 'black', size = 10),
+    axis.text.y = element_text(color = 'black', size = 10), 
+    aspect.ratio = 1,
+    axis.title.x = element_text(size = 9),
+    axis.title.y = element_text(size = 9),
+    plot.title = element_text(size = 9, hjust = 0.5),
+    legend.title = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.position = "right")+
+  scale_color_manual(values = c("blue", "red"))
+
+
+
+#Raman k-means analysis and plotting 
+
+raman_kmeans <- kmeans(raman,3)
+cluster<-  raman_kmeans$cluster
+raman_k_data <-cbind(raman_new,cluster)
+raman_k_data$cluster<-as.factor(raman_k_data$cluster)
+
+raman_k_data %>% 
+  ggplot(mapping = aes(x = PC_1, y = PC_2, color = cluster, shape = class_1)) +
+  geom_point() + 
+  labs(x = "PC1", y = "PC2",title = "Raman k-means cluster Plot")+
+  theme_bw() +
+  theme(
+    panel.border = element_rect(color = 'black', fill = NA),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(color = 'black', size = 10),
+    axis.text.y = element_text(color = 'black', size = 10), 
+    aspect.ratio = 1,
+    axis.title.x = element_text(size = 9),
+    axis.title.y = element_text(size = 9),
+    plot.title = element_text(size = 9, hjust = 0.5),
+    legend.title = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.position = "right")+
+  scale_color_manual(values = c("blue", "red","black"))
+
+
+
+#FTIR k-means analysis and plotting
+
+ftir_kmeans <- kmeans(ftir[,-c(1,2)],3)
+cluster<-  ftir_kmeans$cluster
+ftir_k_data <-cbind(ftir_new,cluster)
+ftir_k_data$cluster<-as.factor(ftir_k_data$cluster)
+
+ftir_k_data %>% 
+  ggplot(mapping = aes(x = PC_1, y = PC_2, color = cluster, shape = class_1)) +
+  geom_point() + 
+  labs(x = "PC1", y = "PC2",title = "FTIR k-means cluster Plot")+
+  theme_bw() +
+  theme(
+    panel.border = element_rect(color = 'black', fill = NA),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(color = 'black', size = 10),
+    axis.text.y = element_text(color = 'black', size = 10), 
+    aspect.ratio = 1,
+    axis.title.x = element_text(size = 9),
+    axis.title.y = element_text(size = 9),
+    plot.title = element_text(size = 9, hjust = 0.5),
+    legend.title = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.position = "right")+
+  scale_color_manual(values = c("blue", "red","black"))
+
+
+
+#UV-Vis k-means analysis and plotting
+
+uvvis_kmeans <- kmeans(uv_vis,2)
+cluster<-  uvvis_kmeans$cluster
+uvvis_k_data <-cbind(uvvis_new,cluster)
+uvvis_k_data$cluster<-as.factor(uvvis_k_data$cluster)
+
+uvvis_k_data %>% 
+  ggplot(mapping = aes(x = PC_1, y = PC_2, color = cluster, shape = class_1)) +
+  geom_point() + 
+  labs(x = "PC1", y = "PC2",title = "UV-Vis k-means cluster Plot")+
+  theme_bw() +
+  theme(
+    panel.border = element_rect(color = 'black', fill = NA),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(color = 'black', size = 10),
+    axis.text.y = element_text(color = 'black', size = 10), 
+    aspect.ratio = 1,
+    axis.title.x = element_text(size = 9),
+    axis.title.y = element_text(size = 9),
+    plot.title = element_text(size = 9, hjust = 0.5),
+    legend.title = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.position = "right")+
+  scale_color_manual(values = c("blue", "red"))
+
+
+
+#GC-MS k-means analysis and plotting
+
+gc_kmeans <- kmeans(gc,2)
+cluster<-  gc_kmeans$cluster
+gc_k_data <-cbind(gc_new,cluster)
+gc_k_data$cluster<-as.factor(gc_k_data$cluster)
+
+gc_k_data %>% 
+  ggplot(mapping = aes(x = PC_1, y = PC_2, color = cluster, shape = class_1)) +
+  geom_point() + 
+  labs(x = "PC1", y = "PC2",title = "GC-MS k-means cluster Plot")+
+  theme_bw() +
+  theme(
+    panel.border = element_rect(color = 'black', fill = NA),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(color = 'black', size = 10),
+    axis.text.y = element_text(color = 'black', size = 10), 
+    aspect.ratio = 1,
+    axis.title.x = element_text(size = 9),
+    axis.title.y = element_text(size = 9),
+    plot.title = element_text(size = 9, hjust = 0.5),
+    legend.title = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.position = "right")+
+  scale_color_manual(values = c("blue", "red"))
+
+
+### Supervised Classification
+
+
+#### Split data for training the models using cross-validation and testing and customize names/labels
+
+
+#HSI data
+#we will use data reduced by PCA
+
+#set seed for reproducibility
+set.seed (123)
+
+hsi_cf<-hsi_new[,-2]
+train_index_hsi<-createDataPartition(hsi_cf$class_1,p = 0.7,list=FALSE)
+
+#split the data as train and test set
+data_train_hsi_cf<-hsi_cf[train_index_hsi,]
+data_test_hsi_cf<-hsi_cf[-train_index_hsi,]
+
+#Check the dimensions of the train and test set for HSI data
+
+dim(data_train_hsi_cf)
+dim(data_test_hsi_cf)
+
+#Change the labels to names
+
+#Train data
+levels(data_train_hsi_cf$class_1)<-c("Adulterated", "Pure_EVOO")
+levels(data_train_hsi_cf$class_1)<-make.names(levels(data_train_hsi_cf$class_1))
+#Test data
+levels(data_test_hsi_cf$class_1)<-c("Adulterated", "Pure_EVOO")
+levels(data_test_hsi_cf$class_1)<-make.names(levels(data_test_hsi_cf$class_1))
+
+#Confirm the changes to the names have been made and the proportion is OK
+table(data_train_hsi_cf$class_1)
+table(data_test_hsi_cf$class_1)
+
+
+#Raman data
+
+#set seed for reproducibility
+set.seed (123)
+
+raman_cf<-raman_new[,-2]
+train_index_raman<-createDataPartition(raman_cf$class_1,p = 0.7,list=FALSE)
+
+#split the data as train and test set
+data_train_raman_cf<-raman_cf[train_index_raman,]
+data_test_raman_cf<-raman_cf[-train_index_raman,]
+
+#Check the dimensions of the train and test set for raman data
+
+dim(data_train_raman_cf)
+dim(data_test_raman_cf)
+
+#Change the labels to names
+
+#Train data
+levels(data_train_raman_cf$class_1)<-c("Adulterated", "Pure_EVOO")
+levels(data_train_raman_cf$class_1)<-make.names(levels(data_train_raman_cf$class_1))
+#Test data
+levels(data_test_raman_cf$class_1)<-c("Adulterated", "Pure_EVOO")
+levels(data_test_raman_cf$class_1)<-make.names(levels(data_test_raman_cf$class_1))
+
+#Confirm the changes to the names have been made and the proportion is OK
+table(data_train_raman_cf$class_1)
+table(data_test_raman_cf$class_1)
+
+
+
+#FTIR data
+#set seed for reproducibility
+set.seed (123)
+
+ftir_cf<-ftir_new[,-2]
+train_index_ftir<-createDataPartition(ftir_cf$class_1,p = 0.7,list=FALSE)
+
+#split the data as train and test set
+data_train_ftir_cf<-ftir_cf[train_index_ftir,]
+data_test_ftir_cf<-ftir_cf[-train_index_ftir,]
+
+#Check the dimensions of the train and test set for ftir data
+
+dim(data_train_ftir_cf)
+dim(data_test_ftir_cf)
+
+#Change the labels to names
+
+#Train data
+levels(data_train_ftir_cf$class_1)<-c("Adulterated", "Pure_EVOO")
+levels(data_train_ftir_cf$class_1)<-make.names(levels(data_train_ftir_cf$class_1))
+#Test data
+levels(data_test_ftir_cf$class_1)<-c("Adulterated", "Pure_EVOO")
+levels(data_test_ftir_cf$class_1)<-make.names(levels(data_test_ftir_cf$class_1))
+
+#Confirm the changes to the names have been made and the proportion is OK
+table(data_train_ftir_cf$class_1)
+table(data_test_ftir_cf$class_1)
+
+
+
+#UV-Vis data
+
+#set seed for reproducibility
+set.seed (123)
+
+uvvis_cf<-uvvis_new[,-2]
+train_index_uvvis<-createDataPartition(uvvis_cf$class_1,p = 0.7,list=FALSE)
+
+#split the data as train and test set
+data_train_uvvis_cf<-uvvis_cf[train_index_uvvis,]
+data_test_uvvis_cf<-uvvis_cf[-train_index_uvvis,]
+
+#Check the dimensions of the train and test set for uvvis data
+
+dim(data_train_uvvis_cf)
+dim(data_test_uvvis_cf)
+
+#Change the labels to names
+
+#Train data
+levels(data_train_uvvis_cf$class_1)<-c("Adulterated", "Pure_EVOO")
+levels(data_train_uvvis_cf$class_1)<-make.names(levels(data_train_uvvis_cf$class_1))
+#Test data
+levels(data_test_uvvis_cf$class_1)<-c("Adulterated", "Pure_EVOO")
+levels(data_test_uvvis_cf$class_1)<-make.names(levels(data_test_uvvis_cf$class_1))
+
+#Confirm the changes to the names have been made and the proportion is OK
+table(data_train_uvvis_cf$class_1)
+table(data_test_uvvis_cf$class_1)
+
+
+#GC-MS data
+#set seed for reproducibility
+set.seed (123)
+
+gc_cf<-gc_new[,-2]
+train_index_gc<-createDataPartition(gc_cf$class_1,p = 0.7,list=FALSE)
+
+#split the data as train and test set
+data_train_gc_cf<-gc_cf[train_index_gc,]
+data_test_gc_cf<-gc_cf[-train_index_gc,]
+
+#Check the dimensions of the train and test set for gc data
+
+dim(data_train_gc_cf)
+dim(data_test_gc_cf)
+
+#Change the labels to names
+
+#Train data
+levels(data_train_gc_cf$class_1)<-c("Adulterated", "Pure_EVOO")
+levels(data_train_gc_cf$class_1)<-make.names(levels(data_train_gc_cf$class_1))
+#Test data
+levels(data_test_gc_cf$class_1)<-c("Adulterated", "Pure_EVOO")
+levels(data_test_gc_cf$class_1)<-make.names(levels(data_test_gc_cf$class_1))
+
+#Confirm the changes to the names have been made and the proportion is OK
+table(data_train_gc_cf$class_1)
+table(data_test_gc_cf$class_1)
+
+
+
+#### Set up parameters for training the model using 10 fold repeated 10 times stratified cross-validation.
+# The optimum model will be selected using the one standard error rule (oneSE): 
+#selection of a model that is within one standard error of the best-performing model to minimize the risk of overfitting.
+#Additionally, #Synthetic Minority Over-sampling Technique# (#SMOTE)# will be used to address class imbalances.
+
+
+# Set up the training control(10 folds 10 times cross_validation)
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 10, 
+                        classProbs = TRUE, savePredictions = "final", 
+                        summaryFunction = multiClassSummary,
+                        selectionFunction = 'oneSE',sampling = 'smote',allowParallel = TRUE)
+
+
+
+#Set the metric as accuracy 
+metric<-"Accuracy"
+
+
+# Detect the number of cores
+num_cores <- detectCores()
+# Print the number of cores
+print(paste("Number of cores available:", num_cores))
+
+
+
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+
+#### Set up #hyper parameters# and train different models
+
+[*Model 1. k-Nearest Neighbors (k-NN)*]{.underline}
+
+
+
+#start_time
+start_time<-Sys.time()
+
+#Set up grid for k neighbors
+grid_knn<-expand.grid(.k = seq(3,30, by =2))#Ensure k in as odd number to avoid ties on majority voting
+
+#Train k-NN models for all the techniques
+
+#HSI k-NN model
+fit_knn_hsi<-train(y=data_train_hsi_cf[,1],x=data_train_hsi_cf[,-1],
+                   method = "knn",tuneGrid = grid_knn,trControl = control,metric = metric)
+
+#Raman k-NN model
+fit_knn_raman<-train(y=data_train_raman_cf[,1],x=data_train_raman_cf[,-1],
+                     method = "knn",tuneGrid = grid_knn,trControl = control,metric = metric)
+
+#FTIR k-NN model
+fit_knn_ftir<-train(y=data_train_ftir_cf[,1],x=data_train_ftir_cf[,-1],
+                    method = "knn",tuneGrid = grid_knn,trControl = control,metric = metric)
+
+#UV-Vis k-NN model
+fit_knn_uvvis<-train(y=data_train_uvvis_cf[,1],x=data_train_uvvis_cf[,-1],
+                     method = "knn",tuneGrid = grid_knn,trControl = control,metric = metric)
+#GC-MS k-NN model
+fit_knn_gc<-train(y=data_train_gc_cf[,1],x=data_train_gc_cf[,-1],
+                  method = "knn",tuneGrid = grid_knn,trControl = control,metric = metric)
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+stopCluster(cl)#stop the parallel run cluster
+
+
+
+#Check the time used to run the models
+model_training_time<-end_time-start_time
+print(paste('The time taken to run the models is',round(model_training_time,2),"seconds"))
+
+
+##### Plot the CV models
+
+
+#HSI CV Plot
+p1<-ggplot(fit_knn_hsi)+geom_line(colour = "red")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='HSI k-NN Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.text = element_text(colour = "black"),
+        aspect.ratio = 1)
+
+#Raman CV Plot
+p2<-ggplot(fit_knn_raman)+geom_line(colour = "blue")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='Raman k-NN Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.text = element_text(colour = "black"),
+        aspect.ratio = 1)
+
+#FTIR CV Plot
+p3<-ggplot(fit_knn_ftir)+geom_line(colour = "black")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='FTIR k-NN Model Training', y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.text = element_text(colour = "black"),
+        aspect.ratio = 1)
+
+#UV-Vis CV Plot
+p4<-ggplot(fit_knn_uvvis)+geom_line(colour = "black",linetype = 'dashed')+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='UV-Vis k-NN Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.text = element_text(colour = "black"),
+        aspect.ratio = 1)
+
+
+#Arrange the knn training model plots
+
+
+grid.arrange(p1,p2,p3,p4,nrow = 2)
+
+
+
+#GC-MS CV Plot
+ggplot(fit_knn_gc)+geom_line(colour = "red",lty = 'dashed')+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='GC-MS k-NN Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.text = element_text(colour = "black"),
+        aspect.ratio = 1)
+
+
+#Display the cross-validation results
+
+
+#HSI CV results
+print(paste('The optimal number of k for training the HSI-kNN model is',fit_knn_hsi$bestTune))
+
+#Output table
+knitr::kable(fit_knn_hsi$results)
+
+#The optimal selected model
+selected_model<-fit_knn_hsi$results %>% filter(k==as.numeric(fit_knn_hsi$bestTune))
+knitr::kable(selected_model)
+
+
+
+#Raman CV results
+print(paste('The optimal number of k for training the Raman-kNN model is',fit_knn_raman$bestTune))
+
+#Output table
+knitr::kable(fit_knn_raman$results)
+
+#The optimal selected model
+selected_model<-fit_knn_raman$results %>% filter(k==as.numeric(fit_knn_raman$bestTune))
+knitr::kable(selected_model)
+
+
+#FTIR CV results
+print(paste('The optimal number of k for training the FTIR-kNN model is',fit_knn_ftir$bestTune))
+
+#Output table
+knitr::kable(fit_knn_ftir$results)
+
+#The optimal selected model
+selected_model<-fit_knn_ftir$results %>% filter(k==as.numeric(fit_knn_ftir$bestTune))
+knitr::kable(selected_model)
+
+
+
+#Uv_Vis CV results
+print(paste('The optimal number of k for training the UV-Vis-kNN model is',fit_knn_uvvis$bestTune))
+
+#Output table
+knitr::kable(fit_knn_uvvis$results)
+
+#The optimal selected model
+selected_model<-fit_knn_uvvis$results %>% filter(k==as.numeric(fit_knn_uvvis$bestTune))
+knitr::kable(selected_model)
+
+
+
+#GC-MS CV results
+print(paste('The optimal number of k for training the GC-MS-kNN model is',fit_knn_gc$bestTune))
+
+#Output table
+knitr::kable(fit_knn_gc$results)
+
+#The optimal selected model
+selected_model<-fit_knn_gc$results %>% filter(k==as.numeric(fit_knn_gc$bestTune))
+knitr::kable(selected_model)
+
+
+#### Testing Models
+
+##### Hyperspectral Imaging kNN Test Results
+
+
+#Predict HSI test set
+test_hsi_knn<-predict(fit_knn_hsi,newdata=data_test_hsi_cf)
+
+#get the confusion matrix
+cfmatrix_hsi<-confusionMatrix(test_hsi_knn,data_test_hsi_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_hsi)
+knitr::kable(cfmatrix_hsi$byClass)
+
+#View the results as knitr table
+knitr::kable(cfmatrix_hsi$table)
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_hsi_knn_table <- cfmatrix_hsi$table
+TP <- cfmatrix_hsi_knn_table[1,1] 
+TN <- cfmatrix_hsi_knn_table[2,2] 
+FP <- cfmatrix_hsi_knn_table[2,1] 
+FN <- cfmatrix_hsi_knn_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value  for the model is ",round(MCC,2)))
+
+
+
+##### Raman Spectroscopy kNN Test Results
+
+
+#Predict Raman test set
+test_raman_knn<-predict(fit_knn_raman,newdata=data_test_raman_cf)
+
+#get the confusion matrix
+cfmatrix_raman<-confusionMatrix(test_raman_knn,data_test_raman_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_raman)
+knitr::kable(cfmatrix_raman$byClass)
+
+#View the results as knitr table
+knitr::kable(cfmatrix_raman$table)
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_raman_knn_table <- cfmatrix_raman$table
+TP <- cfmatrix_raman_knn_table[1,1] 
+TN <- cfmatrix_raman_knn_table[2,2] 
+FP <- cfmatrix_raman_knn_table[2,1] 
+FN <- cfmatrix_raman_knn_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value for the model",round(MCC),2))
+
+
+##### FTIR Spectroscopy kNN Test Results
+
+
+#Predict FTIR test set
+test_ftir_knn<-predict(fit_knn_ftir,newdata=data_test_ftir_cf)
+
+#get the confusion matrix
+cfmatrix_ftir<-confusionMatrix(test_ftir_knn,data_test_ftir_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_ftir)
+knitr::kable(cfmatrix_ftir$byClass)
+
+#View the results as knitr table
+knitr::kable(cfmatrix_ftir$table)
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_ftir_knn_table <- cfmatrix_ftir$table
+TP <- cfmatrix_ftir_knn_table[1,1] 
+TN <- cfmatrix_ftir_knn_table[2,2] 
+FP <- cfmatrix_ftir_knn_table[2,1] 
+FN <- cfmatrix_ftir_knn_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value for the model is",round(MCC),2))
+
+
+##### Uv-Vis Spectroscopy kNN Test Results
+
+
+#Predict uvvis test set
+test_uvvis_knn<-predict(fit_knn_uvvis,newdata=data_test_uvvis_cf)
+
+#get the confusion matrix
+cfmatrix_uvvis<-confusionMatrix(test_uvvis_knn,data_test_uvvis_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_uvvis)
+knitr::kable(cfmatrix_uvvis$byClass)
+
+#View the results as knitr table
+knitr::kable(cfmatrix_uvvis$table)
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_uvvis_knn_table <- cfmatrix_uvvis$table
+TP <- cfmatrix_uvvis_knn_table[1,1] 
+TN <- cfmatrix_uvvis_knn_table[2,2] 
+FP <- cfmatrix_uvvis_knn_table[2,1] 
+FN <- cfmatrix_uvvis_knn_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value for the model is ",round(MCC),2))
+
+
+##### GC-MS spectroscopy kNN Results
+
+
+#Predict gc test set
+test_gc_knn<-predict(fit_knn_gc,newdata=data_test_gc_cf)
+
+#get the confusion matrix
+cfmatrix_gc<-confusionMatrix(test_gc_knn,data_test_gc_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_gc)
+knitr::kable(cfmatrix_gc$byClass)
+
+#View the results as knitr table
+knitr::kable(cfmatrix_gc$table)
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_gc_knn_table <- cfmatrix_gc$table
+TP <- cfmatrix_gc_knn_table[1,1] 
+TN <- cfmatrix_gc_knn_table[2,2] 
+FP <- cfmatrix_gc_knn_table[2,1] 
+FN <- cfmatrix_gc_knn_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value for the model is",round(MCC),2))
+
+
+##### Plot Confusion Matrix Tables for kNN Binary Classifcation Algorithm
+
+
+# Plotting the confusion matrix
+#HSI kNN confusion Matrix
+cf_hsi_knn<-ggplot(data = as.data.frame(cfmatrix_hsi$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "white", high = "#99ccff", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix HSI kNN')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#Raman kNN confusion Matrix
+cf_raman_knn<-ggplot(data = as.data.frame(cfmatrix_raman$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkorange3", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix Raman kNN')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#FTIR kNN confusion Matrix
+cf_ftir_knn<-ggplot(data = as.data.frame(cfmatrix_ftir$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkseagreen2", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix FTIR kNN')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#UV-Vis kNN confusion Matrix
+cf_uvvis_knn<-ggplot(data = as.data.frame(cfmatrix_uvvis$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "azure1", high = "turquoise", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix UV-Vis kNN')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+
+grid.arrange(cf_hsi_knn,cf_raman_knn,cf_ftir_knn,cf_uvvis_knn,nrow = 2)
+
+
+
+#GC-MS kNN confusion Matrix
+ggplot(data = as.data.frame(cfmatrix_gc$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "azure1", high = "tan1", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix GC-MS kNN')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+[#*Model 2. Random Forest (RF)*]{.underline}
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+#start_time
+start_time<-Sys.time()
+
+#Set up grid for mtry: The number of trees
+#We will select the number of trees by tuneLength and cross-validation
+
+#Train RF models for all the techniques
+
+#HSI RF model
+fit_rf_hsi<-train(y=data_train_hsi_cf[,1],x=data_train_hsi_cf[,-1],
+                  method = "rf",tuneLength = 10,trControl = control,metric = metric)
+
+#Raman RF model
+fit_rf_raman<-train(y=data_train_raman_cf[,1],x=data_train_raman_cf[,-1],
+                    method = "rf",tuneLength = 10,trControl = control,metric = metric)
+
+#FTIR RF model
+fit_rf_ftir<-train(y=data_train_ftir_cf[,1],x=data_train_ftir_cf[,-1],
+                   method = "rf",tuneLength = 10,trControl = control,metric = metric)
+
+#UV-Vis RF model
+fit_rf_uvvis<-train(y=data_train_uvvis_cf[,1],x=data_train_uvvis_cf[,-1],
+                    method = "rf",tuneLength = 10,trControl = control,metric = metric)
+#GC-MS RF model
+fit_rf_gc<-train(y=data_train_gc_cf[,1],x=data_train_gc_cf[,-1],
+                 method = "rf",tuneLength = 10,trControl = control,metric = metric)
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+print(model_training_time)
+stopCluster(cl)#stop the parallel run cluster
+
+
+##### Plot the RF CV Models
+
+
+#HSI CV Plot
+p1<-ggplot(fit_rf_hsi)+geom_line(colour = "red")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='HSI RF Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black"),
+        aspect.ratio = 1)
+
+#Raman CV Plot
+p2<-ggplot(fit_rf_raman)+geom_line(colour = "blue")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='Raman RF Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size = 8),
+        aspect.ratio = 1)
+
+#FTIR CV Plot
+p3<-ggplot(fit_rf_ftir)+geom_line(colour = "black")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='FTIR RF Model Training', y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size = 8),
+        aspect.ratio = 1)
+
+#UV-Vis CV Plot
+p4<-ggplot(fit_rf_uvvis)+geom_line(colour = "black",linetype = 'dashed')+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='UV-Vis RF Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size =8),
+        aspect.ratio = 1)
+
+
+#Arrange the RF training model plots
+
+
+grid.arrange(p1,p2,p3,p4,nrow = 2)
+
+
+
+#GC-MS RF CV Plot
+ggplot(fit_rf_gc)+geom_line(colour = "black",linetype = 'dashed')+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='GC-MS RF Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size =8),
+        aspect.ratio = 1)
+
+
+##Dispay RF cross-validation results#
+  
+  
+#HSI RF CV results
+print(paste('The optimal number of mtry for training the HSI-RF model is',fit_rf_hsi$bestTune))
+
+
+
+#Output HSI RF table
+knitr::kable(fit_rf_hsi$results)
+
+#The optimal selected model
+selected_model<-fit_rf_hsi$results %>% filter(mtry==as.numeric(fit_rf_hsi$bestTune))
+knitr::kable(selected_model)
+
+
+
+#Raman CV results
+print(paste('The optimal number of mtry for training the Raman-RF model is',fit_rf_raman$bestTune))
+
+
+
+#Output RF Raman table
+knitr::kable(fit_rf_raman$results)
+
+#The optimal selected model
+selected_model<-fit_rf_raman$results %>% filter(mtry==as.numeric(fit_rf_raman$bestTune))
+knitr::kable(selected_model)
+
+
+
+#FTIR CV results
+print(paste('The optimal number of mtry for training the FTIR-RF model is',fit_rf_ftir$bestTune))
+
+
+
+#Output FTIR table
+knitr::kable(fit_rf_ftir$results)
+
+#The optimal selected model
+selected_model<-fit_rf_ftir$results %>% filter(mtry==as.numeric(fit_rf_ftir$bestTune))
+knitr::kable(selected_model)
+
+
+
+#UV-Vis CV results
+print(paste('The optimal number of mtry for training the UV-Vis-RF model is',fit_rf_uvvis$bestTune))
+
+
+
+#Output UV-Vis table
+knitr::kable(fit_rf_uvvis$results)
+
+#The optimal selected model
+selected_model<-fit_rf_uvvis$results %>% filter(mtry==as.numeric(fit_rf_uvvis$bestTune))
+knitr::kable(selected_model)
+
+
+
+#GC-MS CV results
+print(paste('The optimal number of mtry for training the GC-MS-RF model is',fit_rf_gc$bestTune))
+
+
+
+#Output GC-MS table
+knitr::kable(fit_rf_gc$results)
+
+#The optimal selected model
+selected_model<-fit_rf_gc$results %>% filter(mtry==as.numeric(fit_rf_gc$bestTune))
+knitr::kable(selected_model)
+
+
+#### Test Random Forest Models
+
+##### #Hyperspectral Imaging RF Test Results#
+
+
+#Predict HSI test set
+test_hsi_rf<-predict(fit_rf_hsi,newdata=data_test_hsi_cf)
+
+#get the confusion matrix
+cfmatrix_hsi<-confusionMatrix(test_hsi_rf,data_test_hsi_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_hsi)
+
+
+
+knitr::kable(cfmatrix_hsi$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_hsi$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_hsi_rf_table <- cfmatrix_hsi$table
+TP <- cfmatrix_hsi_rf_table[1,1] 
+TN <- cfmatrix_hsi_rf_table[2,2] 
+FP <- cfmatrix_hsi_rf_table[2,1] 
+FN <- cfmatrix_hsi_rf_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Test RF Raman Model on Test Data#
+
+
+
+#Predict Raman test set
+test_raman_rf<-predict(fit_rf_raman,newdata=data_test_raman_cf)
+
+#get the confusion matrix
+cfmatrix_raman<-confusionMatrix(test_raman_rf,data_test_raman_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_raman)
+
+
+
+knitr::kable(cfmatrix_raman$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_raman$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_raman_rf_table <- cfmatrix_raman$table
+TP <- cfmatrix_raman_rf_table[1,1] 
+TN <- cfmatrix_raman_rf_table[2,2] 
+FP <- cfmatrix_raman_rf_table[2,1] 
+FN <- cfmatrix_raman_rf_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #FTIR Spectroscopy RF Test Results#
+
+
+#Predict FTIR test set
+test_ftir_rf<-predict(fit_rf_ftir,newdata=data_test_ftir_cf)
+
+#get the confusion matrix
+cfmatrix_ftir<-confusionMatrix(test_ftir_rf,data_test_ftir_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_ftir)
+
+
+
+knitr::kable(cfmatrix_ftir$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_ftir$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_ftir_rf_table <- cfmatrix_ftir$table
+TP <- cfmatrix_ftir_rf_table[1,1] 
+TN <- cfmatrix_ftir_rf_table[2,2] 
+FP <- cfmatrix_ftir_rf_table[2,1] 
+FN <- cfmatrix_ftir_rf_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Assess UV-Vis RF Model on Test Data#
+
+
+#Predict uvvis test set
+test_uvvis_rf<-predict(fit_rf_uvvis,newdata=data_test_uvvis_cf)
+
+#get the confusion matrix
+cfmatrix_uvvis<-confusionMatrix(test_uvvis_rf,data_test_uvvis_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_uvvis)
+
+
+
+knitr::kable(cfmatrix_uvvis$byClass)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_uvvis_rf_table <- cfmatrix_uvvis$table
+TP <- cfmatrix_uvvis_rf_table[1,1] 
+TN <- cfmatrix_uvvis_rf_table[2,2] 
+FP <- cfmatrix_uvvis_rf_table[2,1] 
+FN <- cfmatrix_uvvis_rf_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Assess GC-MS RF Model on Test Data#
+
+
+#Predict gc test set
+test_gc_rf<-predict(fit_rf_gc,newdata=data_test_gc_cf)
+
+#get the confusion matrix
+cfmatrix_gc<-confusionMatrix(test_gc_rf,data_test_gc_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_gc)
+
+
+
+knitr::kable(cfmatrix_gc$byClass)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_gc_rf_table <- cfmatrix_gc$table
+TP <- cfmatrix_gc_rf_table[1,1] 
+TN <- cfmatrix_gc_rf_table[2,2] 
+FP <- cfmatrix_gc_rf_table[2,1] 
+FN <- cfmatrix_gc_rf_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+Plot Confusion Matrix Tables for RF Binary ClassifIcation Algorithm
+
+
+# Plotting the confusion matrix
+
+#HSI RF confusion Matrix
+cf_hsi_rf<-ggplot(data = as.data.frame(cfmatrix_hsi$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "white", high = "#99ccff", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix HSI RF')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#Raman RF confusion Matrix
+cf_raman_rf<-ggplot(data = as.data.frame(cfmatrix_raman$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkorange3", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix Raman RF')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#FTIR RF confusion Matrix
+cf_ftir_rf<-ggplot(data = as.data.frame(cfmatrix_ftir$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkseagreen2", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix FTIR RF')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#UV-Vis RF confusion Matrix
+cf_uvvis_rf<-ggplot(data = as.data.frame(cfmatrix_uvvis$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "azure1", high = "turquoise", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix UV-Vis RF')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+
+library(grid)
+grid.arrange(cf_hsi_rf,cf_raman_rf,cf_ftir_rf,cf_uvvis_rf,nrow = 2)
+
+
+
+#GC-MS RF confusion Matrix
+ggplot(data = as.data.frame(cfmatrix_gc$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "azure1", high = "tan1", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix GC-MS RF')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+Model 3: Linear Discriminant Analysis (LDA)
+
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+#start_time
+start_time<-Sys.time()
+
+#Train LDA models for all the techniques
+
+#HSI LDA model
+fit_lda_hsi<-train(y=data_train_hsi_cf[,1],x=data_train_hsi_cf[,-1],
+                   method = "lda",trControl = control,metric = metric)
+
+#Raman LDA model
+fit_lda_raman<-train(y=data_train_raman_cf[,1],x=data_train_raman_cf[,-1],
+                     method = "lda",trControl = control,metric = metric)
+
+#FTIR LDA model
+fit_lda_ftir<-train(y=data_train_ftir_cf[,1],x=data_train_ftir_cf[,-1],
+                    method = "lda",trControl = control,metric = metric)
+
+#UV-Vis LDA model
+fit_lda_uvvis<-train(y=data_train_uvvis_cf[,1],x=data_train_uvvis_cf[,-1],
+                     method = "lda",trControl = control,metric = metric)
+#GC-MS LDA model
+fit_lda_gc<-train(y=data_train_gc_cf[,1],x=data_train_gc_cf[,-1],
+                  method = "lda",trControl = control,metric = metric)
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+print(model_training_time)
+stopCluster(cl)#stop the parallel run cluster
+
+
+##Display LDA cross-validation results#
+  
+  
+#HSI LDA CV results
+#Output HSI RF table
+knitr::kable(fit_lda_hsi$results)
+
+
+
+#Raman LDA CV results
+#Output HSI RF table
+knitr::kable(fit_lda_raman$results)
+
+
+
+#FTIR LDA CV results
+#Output FTIR LDA table
+knitr::kable(fit_lda_ftir$results)
+
+
+
+#UV-Vis LDA CV results
+#Output UV-Vis table
+knitr::kable(fit_lda_uvvis$results)
+
+
+
+#GC LDA CV results
+#Output HSI RF table
+knitr::kable(fit_lda_gc$results)
+
+
+#### Test LDA Models
+
+##### #Hyperspectral Imaging LDA Test Results#
+
+
+#Predict HSI test set
+test_hsi_lda<-predict(fit_lda_hsi,newdata=data_test_hsi_cf)
+
+#get the confusion matrix
+cfmatrix_hsi<-confusionMatrix(test_hsi_lda,data_test_hsi_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_hsi)
+
+
+
+knitr::kable(cfmatrix_hsi$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_hsi$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_hsi_lda_table <- cfmatrix_hsi$table
+TP <- cfmatrix_hsi_lda_table[1,1] 
+TN <- cfmatrix_hsi_lda_table[2,2] 
+FP <- cfmatrix_hsi_lda_table[2,1] 
+FN <- cfmatrix_hsi_lda_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Test LDA Raman Model on Test Data#
+
+
+
+#Predict Raman test set
+test_raman_lda<-predict(fit_lda_raman,newdata=data_test_raman_cf)
+
+#get the confusion matrix
+cfmatrix_raman<-confusionMatrix(test_raman_lda,data_test_raman_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_raman)
+
+
+
+knitr::kable(cfmatrix_raman$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_raman$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_raman_lda_table <- cfmatrix_raman$table
+TP <- cfmatrix_raman_lda_table[1,1] 
+TN <- cfmatrix_raman_lda_table[2,2] 
+FP <- cfmatrix_raman_lda_table[2,1] 
+FN <- cfmatrix_raman_lda_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #FTIR Spectroscopy LDA Test Results#
+
+
+#Predict FTIR test set
+test_ftir_lda<-predict(fit_lda_ftir,newdata=data_test_ftir_cf)
+
+#get the confusion matrix
+cfmatrix_ftir<-confusionMatrix(test_ftir_lda,data_test_ftir_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_ftir)
+
+
+
+knitr::kable(cfmatrix_ftir$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_ftir$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_ftir_lda_table <- cfmatrix_ftir$table
+TP <- cfmatrix_ftir_lda_table[1,1] 
+TN <- cfmatrix_ftir_lda_table[2,2] 
+FP <- cfmatrix_ftir_lda_table[2,1] 
+FN <- cfmatrix_ftir_lda_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Assess UV-Vis LDA Model on Test Data#
+
+
+#Predict uvvis test set
+test_uvvis_lda<-predict(fit_lda_uvvis,newdata=data_test_uvvis_cf)
+
+#get the confusion matrix
+cfmatrix_uvvis<-confusionMatrix(test_uvvis_lda,data_test_uvvis_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_uvvis)
+
+
+
+knitr::kable(cfmatrix_uvvis$byClass)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_uvvis_lda_table <- cfmatrix_uvvis$table
+TP <- cfmatrix_uvvis_lda_table[1,1] 
+TN <- cfmatrix_uvvis_lda_table[2,2] 
+FP <- cfmatrix_uvvis_lda_table[2,1] 
+FN <- cfmatrix_uvvis_lda_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Assess GC-MS LDA Model on Test Data#
+
+
+#Predict gc test set
+test_gc_lda<-predict(fit_lda_gc,newdata=data_test_gc_cf)
+
+#get the confusion matrix
+cfmatrix_gc<-confusionMatrix(test_gc_lda,data_test_gc_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_gc)
+
+
+
+knitr::kable(cfmatrix_gc$byClass)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_gc_lda_table <- cfmatrix_gc$table
+TP <- cfmatrix_gc_lda_table[1,1] 
+TN <- cfmatrix_gc_lda_table[2,2] 
+FP <- cfmatrix_gc_lda_table[2,1] 
+FN <- cfmatrix_gc_lda_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+Plot Confusion Matrix Tables for LDA Binary Classification Algorithm
+
+
+# Plotting the confusion matrix
+
+#HSI LDA confusion Matrix
+cf_hsi_lda<-ggplot(data = as.data.frame(cfmatrix_hsi$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "white", high = "#99ccff", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix HSI LDA')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#Raman LDA confusion Matrix
+cf_raman_lda<-ggplot(data = as.data.frame(cfmatrix_raman$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkorange3", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix Raman LDA')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#FTIR LDA confusion Matrix
+cf_ftir_lda<-ggplot(data = as.data.frame(cfmatrix_ftir$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkseagreen2", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix FTIR LDA')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#UV-Vis LDA confusion Matrix
+cf_uvvis_lda<-ggplot(data = as.data.frame(cfmatrix_uvvis$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "azure1", high = "turquoise", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix UV-Vis LDA')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+
+library(grid)
+grid.arrange(cf_hsi_lda,cf_raman_lda,cf_ftir_lda,cf_uvvis_lda,nrow = 2)
+
+
+
+#GC-MS RF confusion Matrix
+ggplot(data = as.data.frame(cfmatrix_gc$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "azure1", high = "tan1", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix GC-MS LDA')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+[*Model 4. Support Vector Machines (SVM)*]{.underline}
+
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+#start_time
+start_time<-Sys.time()
+
+#Set tuneLength to find optimal value of cost and gamma on cross-validation
+
+#Train SVM models for all the techniques
+
+#HSI SVM model
+
+fit_svm_hsi<-train(class_1~.,data = data_train_hsi_cf,
+                   method = "svmRadial",tuneLength = 10,trControl = control,metric = metric)
+
+#Raman SVM model
+fit_svm_raman<-train(class_1~.,data = data_train_raman_cf,
+                     method = "svmRadial",tuneLength = 10,trControl = control,metric = metric)
+
+#FTIR SVM model
+fit_svm_ftir<-train(class_1~.,data = data_train_ftir_cf,
+                    method = "svmRadial",tuneLength = 10,trControl = control,metric = metric)
+
+#UV-Vis SVM model
+fit_svm_uvvis<-train(class_1~.,data = data_train_uvvis_cf,
+                     method = "svmRadial",tuneLength = 10,trControl = control,metric = metric)
+#GC-MS SVM model
+fit_svm_gc<-train(class_1~.,data = data_train_gc_cf,
+                  method = "svmRadial",tuneLength = 10,trControl = control,metric = metric)
+
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+print(model_training_time)
+stopCluster(cl)#stop the parallel run cluster
+
+
+##Display SVM cross-validation results#
+  
+  
+#HSI SVM CV results
+print(paste('The optimal parameters for training the HSI-SVM model are sigma value of',round(as.numeric(fit_svm_hsi$bestTune$sigma),2),'and Cost parameter of',fit_svm_hsi$bestTune$C))
+
+
+
+#Output HSI SVM table
+knitr::kable(fit_svm_hsi$results)
+
+#The optimal selected model
+selected_model<-fit_svm_hsi$results %>% filter(C==as.numeric(fit_svm_hsi$bestTune$C))
+knitr::kable(selected_model)
+
+
+
+#Raman SVM CV results
+print(paste('The optimal parameters for training the raman-SVM model are sigma value of',round(as.numeric(fit_svm_raman$bestTune$sigma),2),'and Cost parameter of',fit_svm_raman$bestTune$C))
+
+
+
+#Output Raman SVM  table
+knitr::kable(fit_svm_raman$results)
+
+#The optimal selected model
+selected_model<-fit_svm_raman$results %>% filter(C==as.numeric(fit_svm_raman$bestTune$C))
+knitr::kable(selected_model)
+
+
+
+#FTIR SVM CV results
+print(paste('The optimal parameters for training the ftir-SVM model are sigma value of',round(as.numeric(fit_svm_ftir$bestTune$sigma),2),'and Cost parameter of',fit_svm_ftir$bestTune$C))
+
+
+
+#Output FTIR SVM  table
+knitr::kable(fit_svm_ftir$results)
+
+#The optimal selected model
+selected_model<-fit_svm_ftir$results %>% filter(C==as.numeric(fit_svm_ftir$bestTune$C))
+knitr::kable(selected_model)
+
+
+
+#UV-Vis SVM CV results
+print(paste('The optimal parameters for training the uvvis-SVM model are sigma value of',round(as.numeric(fit_svm_uvvis$bestTune$sigma),2),'and Cost parameter of',fit_svm_uvvis$bestTune$C))
+
+
+
+#Output UV-Vis SVM  table
+knitr::kable(fit_svm_uvvis$results)
+
+#The optimal selected model
+selected_model<-fit_svm_uvvis$results %>% filter(C==as.numeric(fit_svm_uvvis$bestTune$C))
+knitr::kable(selected_model)
+
+
+
+#GC-MS SVM CV results
+print(paste('The optimal parameters for training the gc-SVM model are sigma value of',round(as.numeric(fit_svm_gc$bestTune$sigma),2),'and Cost parameter of',fit_svm_gc$bestTune$C))
+
+
+
+#Output GC SVM  table
+knitr::kable(fit_svm_gc$results)
+
+#The optimal selected model
+selected_model<-fit_svm_gc$results %>% filter(C==as.numeric(fit_svm_gc$bestTune$C))
+knitr::kable(selected_model)
+
+
+##### Plot the SVM CV Models
+
+
+#HSI CV Plot
+p1<-ggplot(fit_svm_hsi)+geom_line(colour = "red")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='HSI SVM Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black"),
+        aspect.ratio = 1)
+
+#Raman CV Plot
+p2<-ggplot(fit_svm_raman)+geom_line(colour = "blue")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='Raman SVM Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size = 8),
+        aspect.ratio = 1)
+
+#FTIR CV Plot
+p3<-ggplot(fit_svm_ftir)+geom_line(colour = "black")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='FTIR SVM Model Training', y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size = 8),
+        aspect.ratio = 1)
+
+#UV-Vis CV Plot
+p4<-ggplot(fit_svm_uvvis)+geom_line(colour = "black",linetype = 'dashed')+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='UV-Vis SVM Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size =8),
+        aspect.ratio = 1)
+
+
+#Arrange the svm training model plots
+
+
+grid.arrange(p1,p2,p3,p4,nrow = 2)
+
+
+
+#GC-MS SVM CV Plot
+ggplot(fit_svm_gc)+geom_line(colour = "black",linetype = 'dashed')+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='GC-MS SVM Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size =8),
+        aspect.ratio = 1)
+
+
+#### Test SVM Models
+
+##### #Hyperspectral Imaging SVM Test Results#
+
+
+#Predict HSI test set
+test_hsi_svm<-predict(fit_svm_hsi,newdata=data_test_hsi_cf)
+
+#get the confusion matrix
+cfmatrix_hsi<-confusionMatrix(test_hsi_svm,data_test_hsi_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_hsi)
+
+
+
+knitr::kable(cfmatrix_hsi$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_hsi$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_hsi_svm_table <- cfmatrix_hsi$table
+TP <- cfmatrix_hsi_svm_table[1,1] 
+TN <- cfmatrix_hsi_svm_table[2,2] 
+FP <- cfmatrix_hsi_svm_table[2,1] 
+FN <- cfmatrix_hsi_svm_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Test SVM Raman Model on Test Data#
+
+
+#Predict Raman test set
+test_raman_svm<-predict(fit_svm_raman,newdata=data_test_raman_cf)
+
+#get the confusion matrix
+cfmatrix_raman<-confusionMatrix(test_raman_svm,data_test_raman_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_raman)
+
+
+
+knitr::kable(cfmatrix_raman$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_raman$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_raman_svm_table <- cfmatrix_raman$table
+TP <- cfmatrix_raman_svm_table[1,1] 
+TN <- cfmatrix_raman_svm_table[2,2] 
+FP <- cfmatrix_raman_svm_table[2,1] 
+FN <- cfmatrix_raman_svm_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #FTIR Spectroscopy SVM Test Results#
+
+
+#Predict FTIR test set
+test_ftir_svm<-predict(fit_svm_ftir,newdata=data_test_ftir_cf)
+
+#get the confusion matrix
+cfmatrix_ftir<-confusionMatrix(test_ftir_svm,data_test_ftir_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_ftir)
+
+
+
+knitr::kable(cfmatrix_ftir$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_ftir$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_ftir_svm_table <- cfmatrix_ftir$table
+TP <- cfmatrix_ftir_svm_table[1,1] 
+TN <- cfmatrix_ftir_svm_table[2,2] 
+FP <- cfmatrix_ftir_svm_table[2,1] 
+FN <- cfmatrix_ftir_svm_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Assess UV-Vis SVM Model on Test Data#
+
+
+#Predict uvvis test set
+test_uvvis_svm<-predict(fit_svm_uvvis,newdata=data_test_uvvis_cf)
+
+#get the confusion matrix
+cfmatrix_uvvis<-confusionMatrix(test_uvvis_svm,data_test_uvvis_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_uvvis)
+
+
+
+knitr::kable(cfmatrix_uvvis$byClass)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_uvvis_svm_table <- cfmatrix_uvvis$table
+TP <- cfmatrix_uvvis_svm_table[1,1] 
+TN <- cfmatrix_uvvis_svm_table[2,2] 
+FP <- cfmatrix_uvvis_svm_table[2,1] 
+FN <- cfmatrix_uvvis_svm_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Assess GC-MS SVM Model on Test Data#
+
+
+#Predict gc test set
+test_gc_svm<-predict(fit_svm_gc,newdata=data_test_gc_cf)
+
+#get the confusion matrix
+cfmatrix_gc<-confusionMatrix(test_gc_svm,data_test_gc_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_gc)
+
+
+
+knitr::kable(cfmatrix_gc$byClass)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_gc_svm_table <- cfmatrix_gc$table
+TP <- cfmatrix_gc_svm_table[1,1] 
+TN <- cfmatrix_gc_svm_table[2,2] 
+FP <- cfmatrix_gc_svm_table[2,1] 
+FN <- cfmatrix_gc_svm_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+Plot Confusion Matrix Tables for SVM Binary Classification Algorithm
+
+
+# Plotting the confusion matrix
+
+#HSI SVM confusion Matrix
+cf_hsi_svm<-ggplot(data = as.data.frame(cfmatrix_hsi$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "white", high = "#99ccff", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix HSI SVM')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#Raman SVM confusion Matrix
+cf_raman_svm<-ggplot(data = as.data.frame(cfmatrix_raman$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkorange3", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix Raman SVM')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#FTIR SVM confusion Matrix
+cf_ftir_svm<-ggplot(data = as.data.frame(cfmatrix_ftir$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkseagreen2", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix FTIR SVM')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#UV-Vis SVM confusion Matrix
+cf_uvvis_svm<-ggplot(data = as.data.frame(cfmatrix_uvvis$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "azure1", high = "turquoise", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix UV-Vis SVM')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+
+library(grid)
+grid.arrange(cf_hsi_svm,cf_raman_svm,cf_ftir_svm,cf_uvvis_svm,nrow = 2)
+
+
+
+#GC-MS SVM confusion Matrix
+ggplot(data = as.data.frame(cfmatrix_gc$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "azure1", high = "tan1", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix GC-MS SVM')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+[*Model 5. Artificial Neural Networks (ANN)*]{.underline}
+
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+#start_time
+start_time<-Sys.time()
+
+#Set tune grid to find optimal value of size and decay on cross-validation
+#size is the number of number of units (neurons) in the hidden layer of the neural network
+#decay is the regularization parameter; adds penalty to the loss function
+
+grid <- expand.grid(.size=seq(1,10, by =1),.decay=c(0,0.001,0.01,0.1))
+
+#Train ANN models for all the techniques
+
+#HSI ANN model
+
+fit_nnet_hsi<-train(class_1~.,data = data_train_hsi_cf,
+                    method = "nnet",tuneGrid = grid, trControl = control,
+                    metric = metric,trace = FALSE, MaxNWts = 1000, maxit = 200)
+
+#Raman ANN model
+fit_nnet_raman<-train(class_1~.,data = data_train_raman_cf,
+                      method = "nnet",tuneGrid = grid, trControl = control,
+                      metric = metric,trace = FALSE, MaxNWts = 1000, maxit = 200)
+
+#FTIR ANN model
+fit_nnet_ftir<-train(class_1~.,data = data_train_ftir_cf,
+                     method = "nnet",tuneGrid = grid, trControl = control,
+                     metric = metric,trace = FALSE, MaxNWts = 1000, maxit = 200)
+
+#UV-Vis ANN model
+fit_nnet_uvvis<-train(class_1~.,data = data_train_uvvis_cf,
+                      method = "nnet",tuneGrid = grid, trControl = control,
+                      metric = metric,trace = FALSE, MaxNWts = 1000, maxit = 200)
+#GC-MS ANN model
+fit_nnet_gc<-train(class_1~.,data = data_train_gc_cf,
+                   method = "nnet",tuneGrid = grid, trControl = control,
+                   metric = metric,trace = FALSE, MaxNWts = 1000, maxit = 200)
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+print(model_training_time)
+stopCluster(cl)#stop the parallel run cluster
+
+
+##### Plot the NNET CV Models
+
+
+#HSI CV Plot
+p1<-ggplot(fit_nnet_hsi)+geom_line(colour = "red")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='HSI NNET Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black"),
+        aspect.ratio = 1)
+
+#Raman CV Plot
+p2<-ggplot(fit_nnet_raman)+geom_line(colour = "blue")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='Raman NNET Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size = 8),
+        aspect.ratio = 1)
+
+#FTIR CV Plot
+p3<-ggplot(fit_nnet_ftir)+geom_line(colour = "black")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='FTIR NNET Model Training', y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size = 8),
+        aspect.ratio = 1)
+
+#UV-Vis CV Plot
+p4<-ggplot(fit_nnet_uvvis)+geom_line(colour = "black",linetype = 'dashed')+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='UV-Vis NNET Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size =8),
+        aspect.ratio = 1)
+
+
+#Arrange the nnet training model plots
+
+
+grid.arrange(p1,p2,p3,p4,nrow = 2)
+
+
+
+#GC-MS NNET CV Plot
+ggplot(fit_nnet_gc)+geom_line(colour = "black",linetype = 'dashed')+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='GC-MS NNET Model Training',y = "Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size =8),
+        aspect.ratio = 1)
+
+
+##Display NNET cross-validation results#
+  
+  
+#HSI NNET CV results
+print(paste('The optimal parameters for training the HSI-nnet model are',round(as.numeric(fit_nnet_hsi$bestTune$size),2),'neurons','and decay value of',fit_nnet_hsi$bestTune$decay))
+
+
+
+#Output HSI NNET table
+knitr::kable(fit_nnet_hsi$results)
+
+#The optimal selected model
+selected_model <- fit_nnet_hsi$results %>% 
+  filter(size == fit_nnet_hsi$bestTune$size & decay == fit_nnet_hsi$bestTune$decay)
+
+knitr::kable(selected_model)
+
+
+
+#Rama NNET CV results
+print(paste('The optimal parameters for training the Raman-nnet model are',round(as.numeric(fit_nnet_raman$bestTune$size),2),'neurons','and decay value of',fit_nnet_raman$bestTune$decay))
+
+
+
+#Output Raman NNET table
+knitr::kable(fit_nnet_raman$results)
+
+#The optimal selected model
+selected_model <- fit_nnet_raman$results %>% 
+  filter(size == fit_nnet_raman$bestTune$size & decay == fit_nnet_raman$bestTune$decay)
+
+knitr::kable(selected_model)
+
+
+
+#FTIR NNET CV results
+print(paste('The optimal parameters for training the FTIR-nnet model are',round(as.numeric(fit_nnet_ftir$bestTune$size),2),'neurons','and decay value of',fit_nnet_ftir$bestTune$decay))
+
+
+
+#Output FTIR NNET table
+knitr::kable(fit_nnet_ftir$results)
+
+#The optimal selected model
+selected_model <- fit_nnet_ftir$results %>% 
+  filter(size == fit_nnet_ftir$bestTune$size & decay == fit_nnet_ftir$bestTune$decay)
+
+knitr::kable(selected_model)
+
+
+
+#UV-VIS NNET CV results
+print(paste('The optimal parameters for training the UVVIS-nnet model are',round(as.numeric(fit_nnet_uvvis$bestTune$size),2),'neurons','and decay value of',fit_nnet_uvvis$bestTune$decay))
+
+
+
+#Output UV-Vis NNET table
+knitr::kable(fit_nnet_uvvis$results)
+
+#The optimal selected model
+selected_model <- fit_nnet_uvvis$results %>% 
+  filter(size == fit_nnet_uvvis$bestTune$size & decay == fit_nnet_uvvis$bestTune$decay)
+
+knitr::kable(selected_model)
+
+
+
+#GC-MS NNET CV results
+print(paste('The optimal parameters for training the gc-nnet model are sigma value of',round(as.numeric(fit_nnet_gc$bestTune$size),2),'and Cost parameter of',fit_nnet_gc$bestTune$decay))
+
+
+
+#Output GC NNET  table
+knitr::kable(fit_nnet_gc$results)
+
+#The optimal selected model
+selected_model<-fit_nnet_gc$results %>% 
+  filter(size == fit_nnet_gc$bestTune$size & decay == fit_nnet_gc$bestTune$decay)
+knitr::kable(selected_model)
+
+
+#### Test NNET Models
+
+##### #Hyperspectral Imaging NNET Test Results#
+
+
+#Predict HSI test set
+test_hsi_nnet<-predict(fit_nnet_hsi,newdata=data_test_hsi_cf)
+
+#get the confusion matrix
+cfmatrix_hsi<-confusionMatrix(test_hsi_nnet,data_test_hsi_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_hsi)
+
+
+
+knitr::kable(cfmatrix_hsi$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_hsi$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_hsi_nnet_table <- cfmatrix_hsi$table
+TP <- cfmatrix_hsi_nnet_table[1,1] 
+TN <- cfmatrix_hsi_nnet_table[2,2] 
+FP <- cfmatrix_hsi_nnet_table[2,1] 
+FN <- cfmatrix_hsi_nnet_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Test NNET Raman Model on Test Data#
+
+
+#Predict Raman test set
+test_raman_nnet<-predict(fit_nnet_raman,newdata=data_test_raman_cf)
+
+#get the confusion matrix
+cfmatrix_raman<-confusionMatrix(test_raman_nnet,data_test_raman_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_raman)
+
+
+
+knitr::kable(cfmatrix_raman$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_raman$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_raman_nnet_table <- cfmatrix_raman$table
+TP <- cfmatrix_raman_nnet_table[1,1] 
+TN <- cfmatrix_raman_nnet_table[2,2] 
+FP <- cfmatrix_raman_nnet_table[2,1] 
+FN <- cfmatrix_raman_nnet_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #FTIR Spectroscopy NNET Test Results#
+
+
+#Predict FTIR test set
+test_ftir_nnet<-predict(fit_nnet_ftir,newdata=data_test_ftir_cf)
+
+#get the confusion matrix
+cfmatrix_ftir<-confusionMatrix(test_ftir_nnet,data_test_ftir_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_ftir)
+
+
+
+knitr::kable(cfmatrix_ftir$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_ftir$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_ftir_nnet_table <- cfmatrix_ftir$table
+TP <- cfmatrix_ftir_nnet_table[1,1] 
+TN <- cfmatrix_ftir_nnet_table[2,2] 
+FP <- cfmatrix_ftir_nnet_table[2,1] 
+FN <- cfmatrix_ftir_nnet_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Assess UV-Vis NNET Model on Test Data#
+
+
+#Predict uvvis test set
+test_uvvis_nnet<-predict(fit_nnet_uvvis,newdata=data_test_uvvis_cf)
+
+#get the confusion matrix
+cfmatrix_uvvis<-confusionMatrix(test_uvvis_nnet,data_test_uvvis_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_uvvis)
+
+
+
+knitr::kable(cfmatrix_uvvis$byClass)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_uvvis_nnet_table <- cfmatrix_uvvis$table
+TP <- cfmatrix_uvvis_nnet_table[1,1] 
+TN <- cfmatrix_uvvis_nnet_table[2,2] 
+FP <- cfmatrix_uvvis_nnet_table[2,1] 
+FN <- cfmatrix_uvvis_nnet_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Assess GC-MS NNET Model on Test Data#
+
+
+#Predict gc test set
+test_gc_nnet<-predict(fit_nnet_gc,newdata=data_test_gc_cf)
+
+#get the confusion matrix
+cfmatrix_gc<-confusionMatrix(test_gc_nnet,data_test_gc_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_gc)
+
+
+
+knitr::kable(cfmatrix_gc$byClass)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_gc_nnet_table <- cfmatrix_gc$table
+TP <- cfmatrix_gc_nnet_table[1,1] 
+TN <- cfmatrix_gc_nnet_table[2,2] 
+FP <- cfmatrix_gc_nnet_table[2,1] 
+FN <- cfmatrix_gc_nnet_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+Plot Confusion Matrix Tables for NNET Binary Classification Algorithm
+
+
+# Plotting the confusion matrix
+
+#HSI NNET confusion Matrix
+cf_hsi_nnet<-ggplot(data = as.data.frame(cfmatrix_hsi$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "white", high = "#99ccff", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix HSI NNET')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#Raman NNET confusion Matrix
+cf_raman_nnet<-ggplot(data = as.data.frame(cfmatrix_raman$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkorange3", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix Raman NNET')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#FTIR NNET confusion Matrix
+cf_ftir_nnet<-ggplot(data = as.data.frame(cfmatrix_ftir$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkseagreen2", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix FTIR NNET')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#UV-Vis NNET confusion Matrix
+cf_uvvis_nnet<-ggplot(data = as.data.frame(cfmatrix_uvvis$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "azure1", high = "turquoise", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix UV-Vis NNET')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+
+library(grid)
+grid.arrange(cf_hsi_nnet,cf_raman_nnet,cf_ftir_nnet,cf_uvvis_nnet,nrow = 2)
+
+
+
+#GC-MS NNET confusion Matrix
+ggplot(data = as.data.frame(cfmatrix_gc$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "azure1", high = "tan1", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix GC-MS NNET')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+[*Model 6. eXtreme Gradient Boostir (XGBoost)*]{.underline}
+
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(7,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+#start_time
+start_time<-Sys.time()
+
+#Set tuneLength to find optimal value of on cross-validation
+
+#Train XGBoost models for all the techniques
+
+#HSI XGBoost model
+
+fit_XGBoost_hsi<-train(class_1~.,data = data_train_hsi_cf,
+                       method = "xgbTree",tuneLength = 10,trControl = control,metric = metric)
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+print(model_training_time)
+stopCluster(cl)#stop the parallel run cluster
+
+
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(7,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+#start_time
+start_time<-Sys.time()
+
+#Set tuneLength to find optimal value of on cross-validation
+
+#Raman XGBoost model
+
+fit_XGBoost_raman<-train(class_1~.,data = data_train_raman_cf,
+                         method = "xgbTree",tuneLength = 10,trControl = control,metric = metric)
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+print(model_training_time)
+stopCluster(cl)#stop the parallel run cluster
+
+
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+#start_time
+start_time<-Sys.time()
+
+#Set tuneLength to find optimal value of on cross-validation
+
+#FTIR XGBoost model
+
+fit_XGBoost_ftir<-train(class_1~.,data = data_train_ftir_cf,
+                        method = "xgbTree",tuneLength = 10,trControl = control,metric = metric)
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+print(model_training_time)
+stopCluster(cl)#stop the parallel run cluster
+
+
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+#start_time
+start_time<-Sys.time()
+
+#Set tuneLength to find optimal value of on cross-validation
+
+#UV-Vis XGBoost model
+
+fit_XGBoost_uvvis<-train(class_1~.,data = data_train_uvvis_cf,
+                         method = "xgbTree",tuneLength = 10,trControl = control,metric = metric)
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+print(model_training_time)
+stopCluster(cl)#stop the parallel run cluster
+
+
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+#start_time
+start_time<-Sys.time()
+
+#Set tuneLength to find optimal value of on cross-validation
+
+#GC-MS XGBoost model
+
+fit_XGBoost_gc<-train(class_1~.,data = data_train_gc_cf,
+                      method = "xgbTree",tuneLength = 10,trControl = control,metric = metric)
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+print(model_training_time)
+stopCluster(cl)#stop the parallel run cluster
+
+
+#Arrange the XGBoost training model plots
+
+
+##HSI XGBoost Parameter Tuning Plot
+ggplot(fit_XGBoost_hsi$results, aes(x = nrounds, y = Accuracy, color = factor(max_depth), shape = factor(eta))) +
+  geom_point(size = 3) +
+  facet_grid(gamma ~ colsample_bytree) +
+  labs(title = "Hyperparameter Tuning HSI Results",
+       x = "Number of Rounds",
+       y = "Accuracy",
+       color = "Max Depth",
+       shape = "Eta") +
+  theme_bw()+
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 10),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.text = element_text(colour = "black",size=10),
+    axis.title = element_text(colour = "black",size=10),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size=10),
+    aspect.ratio = 1
+  )
+
+
+
+##Raman XGBoost Parameter Tuning Plot
+ggplot(fit_XGBoost_raman$results, aes(x = nrounds, y = Accuracy, color = factor(max_depth), shape = factor(eta))) +
+  geom_point(size = 3) +
+  facet_grid(gamma ~ colsample_bytree) +
+  labs(title = "Hyperparameter Tuning Raman Results",
+       x = "Number of Rounds",
+       y = "Accuracy",
+       color = "Max Depth",
+       shape = "Eta") +
+  theme_bw()+
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 10),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.text = element_text(colour = "black",size=10),
+    axis.title = element_text(colour = "black",size=10),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size=10),
+    aspect.ratio = 1
+  )
+
+
+
+##FTIR XGBoost Parameter Tuning Plot
+ggplot(fit_XGBoost_ftir$results, aes(x = nrounds, y = Accuracy, color = factor(max_depth), shape = factor(eta))) +
+  geom_point(size = 3) +
+  facet_grid(gamma ~ colsample_bytree) +
+  labs(title = "Hyperparameter Tuning FTIR Results",
+       x = "Number of Rounds",
+       y = "Accuracy",
+       color = "Max Depth",
+       shape = "Eta") +
+  theme_bw()+
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 10),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.text = element_text(colour = "black",size=10),
+    axis.title = element_text(colour = "black",size=10),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size=10),
+    aspect.ratio = 1
+  )
+
+
+
+
+##UVVIS XGBoost Parameter Tuning Plot
+ggplot(fit_XGBoost_uvvis$results, aes(x = nrounds, y = Accuracy, color = factor(max_depth), shape = factor(eta))) +
+  geom_point(size = 3) +
+  facet_grid(gamma ~ colsample_bytree) +
+  labs(title = "Hyperparameter Tuning UVVIS Results",
+       x = "Number of Rounds",
+       y = "Accuracy",
+       color = "Max Depth",
+       shape = "Eta") +
+  theme_bw()+
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 10),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.text = element_text(colour = "black",size=10),
+    axis.title = element_text(colour = "black",size=10),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size=10),
+    aspect.ratio = 1
+  )
+
+
+
+
+##GC-MS XGBoost Parameter Tuning Plot
+ggplot(fit_XGBoost_hsi$results, aes(x = nrounds, y = Accuracy, color = factor(max_depth), shape = factor(eta))) +
+  geom_point(size = 3) +
+  facet_grid(gamma ~ colsample_bytree) +
+  labs(title = "Hyperparameter Tuning HSI Results",
+       x = "Number of Rounds",
+       y = "Accuracy",
+       color = "Max Depth",
+       shape = "Eta") +
+  theme_bw()+
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 10),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.text = element_text(colour = "black",size=10),
+    axis.title = element_text(colour = "black",size=10),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size=10),
+    aspect.ratio = 1
+  )
+
+
+##Display XGBoost cross-validation results#
+  
+  
+#HSI XGBoost CV results
+print(paste('The optimal parameters for training the HSI-XGBoost model are',
+            as.numeric(fit_XGBoost_hsi$bestTune$nrounds),'nrounds,', 
+            'max_depth of',as.numeric(fit_XGBoost_hsi$bestTune$max_depth),',',
+            'eta-value of',as.numeric(fit_XGBoost_hsi$bestTune$eta),',',
+            'gamma value of',as.numeric(fit_XGBoost_hsi$bestTune$gamma),',',
+            'colsample_bytree value of',as.numeric(fit_XGBoost_hsi$bestTune$colsample_bytree),',',
+            'min_child_weight of',as.numeric(fit_XGBoost_hsi$bestTune$min_child_weight), ',',
+            'and subsample value of', as.numeric(fit_XGBoost_hsi$bestTune$subsample)))
+
+
+
+#Output HSI XGBoost table
+knitr::kable(fit_XGBoost_hsi$results)
+
+#The optimal selected model
+
+# Extract best tuning parameters from the XGBoost model fit
+best_params <- fit_XGBoost_hsi$bestTune
+
+# Filter the model with the best tuning parameters
+selected_model <- fit_XGBoost_hsi$results %>%
+  filter(
+    nrounds == best_params$nrounds &
+      max_depth == best_params$max_depth &
+      eta == best_params$eta &
+      gamma == best_params$gamma &
+      colsample_bytree == best_params$colsample_bytree &
+      min_child_weight == best_params$min_child_weight &
+      subsample == best_params$subsample
+  )
+knitr::kable(selected_model)
+
+
+
+# XGBoost Raman CV results
+print(paste('The optimal parameters for training the raman-XGBoost model are',
+            as.numeric(fit_XGBoost_raman$bestTune$nrounds),'nrounds,', 
+            'max_depth of',as.numeric(fit_XGBoost_raman$bestTune$max_depth),',',
+            'eta-value of',as.numeric(fit_XGBoost_raman$bestTune$eta),',',
+            'gamma value of',as.numeric(fit_XGBoost_raman$bestTune$gamma),',',
+            'colsample_bytree value of',as.numeric(fit_XGBoost_raman$bestTune$colsample_bytree),',',
+            'min_child_weight of',as.numeric(fit_XGBoost_raman$bestTune$min_child_weight), ',',
+            'and subsample value of', round(as.numeric(fit_XGBoost_raman$bestTune$subsample),2)))
+
+
+
+#Output Raman XGBoost table
+knitr::kable(fit_XGBoost_raman$results)
+
+#The optimal selected model
+
+# Extract best tuning parameters from the XGBoost model fit
+best_params <- fit_XGBoost_raman$bestTune
+
+# Filter the model with the best tuning parameters
+selected_model <- fit_XGBoost_raman$results %>%
+  filter(
+    nrounds == best_params$nrounds &
+      max_depth == best_params$max_depth &
+      eta == best_params$eta &
+      gamma == best_params$gamma &
+      colsample_bytree == best_params$colsample_bytree &
+      min_child_weight == best_params$min_child_weight &
+      subsample == best_params$subsample
+  )
+knitr::kable(selected_model)
+
+
+
+#FTIR XGBoost CV results
+print(paste('The optimal parameters for training the ftir-XGBoost model are',
+            as.numeric(fit_XGBoost_ftir$bestTune$nrounds),'nrounds,', 
+            'max_depth of',as.numeric(fit_XGBoost_ftir$bestTune$max_depth),',',
+            'eta-value of',as.numeric(fit_XGBoost_ftir$bestTune$eta),',',
+            'gamma value of',as.numeric(fit_XGBoost_ftir$bestTune$gamma),',',
+            'colsample_bytree value of',as.numeric(fit_XGBoost_ftir$bestTune$colsample_bytree),',',
+            'min_child_weight of',as.numeric(fit_XGBoost_ftir$bestTune$min_child_weight), ',',
+            'and subsample value of', round(as.numeric(fit_XGBoost_ftir$bestTune$subsample),2)))
+
+
+
+#Output FTIR XGBoost table
+knitr::kable(fit_XGBoost_ftir$results)
+
+#The optimal selected model
+
+# Extract best tuning parameters from the XGBoost model fit
+best_params <- fit_XGBoost_ftir$bestTune
+
+# Filter the model with the best tuning parameters
+selected_model <- fit_XGBoost_ftir$results %>%
+  filter(
+    nrounds == best_params$nrounds &
+      max_depth == best_params$max_depth &
+      eta == best_params$eta &
+      gamma == best_params$gamma &
+      colsample_bytree == best_params$colsample_bytree &
+      min_child_weight == best_params$min_child_weight &
+      subsample == best_params$subsample
+  )
+knitr::kable(selected_model)
+
+
+
+#UV-Vis XGBoost CV results
+print(paste('The optimal parameters for training the uvvis-XGBoost model are',
+            as.numeric(fit_XGBoost_uvvis$bestTune$nrounds),'nrounds,', 
+            'max_depth of',as.numeric(fit_XGBoost_uvvis$bestTune$max_depth),',',
+            'eta-value of',as.numeric(fit_XGBoost_uvvis$bestTune$eta),',',
+            'gamma value of',as.numeric(fit_XGBoost_uvvis$bestTune$gamma),',',
+            'colsample_bytree value of',as.numeric(fit_XGBoost_uvvis$bestTune$colsample_bytree),',',
+            'min_child_weight of',as.numeric(fit_XGBoost_uvvis$bestTune$min_child_weight), ',',
+            'and subsample value of', round(as.numeric(fit_XGBoost_uvvis$bestTune$subsample),2)))
+
+
+
+#Output UV-Vis XGBoost table
+knitr::kable(fit_XGBoost_uvvis$results)
+
+#The optimal selected model
+
+# Extract best tuning parameters from the XGBoost model fit
+best_params <- fit_XGBoost_uvvis$bestTune
+
+# Filter the model with the best tuning parameters
+selected_model <- fit_XGBoost_uvvis$results %>%
+  filter(
+    nrounds == best_params$nrounds &
+      max_depth == best_params$max_depth &
+      eta == best_params$eta &
+      gamma == best_params$gamma &
+      colsample_bytree == best_params$colsample_bytree &
+      min_child_weight == best_params$min_child_weight &
+      subsample == best_params$subsample
+  )
+knitr::kable(selected_model)
+
+
+
+#GC-MS XGBoost CV results
+print(paste('The optimal parameters for training the gc-XGBoost model are',
+            as.numeric(fit_XGBoost_gc$bestTune$nrounds),'nrounds,', 
+            'max_depth of',as.numeric(fit_XGBoost_gc$bestTune$max_depth),',',
+            'eta-value of',as.numeric(fit_XGBoost_gc$bestTune$eta),',',
+            'gamma value of',as.numeric(fit_XGBoost_gc$bestTune$gamma),',',
+            'colsample_bytree value of',as.numeric(fit_XGBoost_gc$bestTune$colsample_bytree),',',
+            'min_child_weight of',as.numeric(fit_XGBoost_gc$bestTune$min_child_weight), ',',
+            'and subsample value of', round(as.numeric(fit_XGBoost_gc$bestTune$subsample),2)))
+
+
+
+#Output GC-MS XGBoost table
+knitr::kable(fit_XGBoost_gc$results)
+
+#The optimal selected model
+
+# Extract best tuning parameters from the XGBoost model fit
+best_params <- fit_XGBoost_gc$bestTune
+
+# Filter the model with the best tuning parameters
+selected_model <- fit_XGBoost_gc$results %>%
+  filter(
+    nrounds == best_params$nrounds &
+      max_depth == best_params$max_depth &
+      eta == best_params$eta &
+      gamma == best_params$gamma &
+      colsample_bytree == best_params$colsample_bytree &
+      min_child_weight == best_params$min_child_weight &
+      subsample == best_params$subsample
+  )
+knitr::kable(selected_model)
+
+
+#### Test XGBoost Models
+
+##### #Hyperspectral Imaging XGBoost Test Results#
+
+
+#Predict HSI test set
+test_hsi_XGBoost<-predict(fit_XGBoost_hsi,newdata=data_test_hsi_cf)
+
+#get the confusion matrix
+cfmatrix_hsi<-confusionMatrix(test_hsi_XGBoost,data_test_hsi_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_hsi)
+
+
+
+knitr::kable(cfmatrix_hsi$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_hsi$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_hsi_XGBoost_table <- cfmatrix_hsi$table
+TP <- cfmatrix_hsi_XGBoost_table[1,1] 
+TN <- cfmatrix_hsi_XGBoost_table[2,2] 
+FP <- cfmatrix_hsi_XGBoost_table[2,1] 
+FN <- cfmatrix_hsi_XGBoost_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Test XGBoost Raman Model on Test Data#
+
+
+#Predict Raman test set
+test_raman_XGBoost<-predict(fit_XGBoost_raman,newdata=data_test_raman_cf)
+
+#get the confusion matrix
+cfmatrix_raman<-confusionMatrix(test_raman_XGBoost,data_test_raman_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_raman)
+
+
+
+knitr::kable(cfmatrix_raman$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_raman$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_raman_XGBoost_table <- cfmatrix_raman$table
+TP <- cfmatrix_raman_XGBoost_table[1,1] 
+TN <- cfmatrix_raman_XGBoost_table[2,2] 
+FP <- cfmatrix_raman_XGBoost_table[2,1] 
+FN <- cfmatrix_raman_XGBoost_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #FTIR Spectroscopy XGBoost Test Results#
+
+
+#Predict FTIR test set
+test_ftir_XGBoost<-predict(fit_XGBoost_ftir,newdata=data_test_ftir_cf)
+
+#get the confusion matrix
+cfmatrix_ftir<-confusionMatrix(test_ftir_XGBoost,data_test_ftir_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_ftir)
+
+
+
+knitr::kable(cfmatrix_ftir$byClass)
+
+
+
+#View the results as knitr table
+knitr::kable(cfmatrix_ftir$table)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_ftir_XGBoost_table <- cfmatrix_ftir$table
+TP <- cfmatrix_ftir_XGBoost_table[1,1] 
+TN <- cfmatrix_ftir_XGBoost_table[2,2] 
+FP <- cfmatrix_ftir_XGBoost_table[2,1] 
+FN <- cfmatrix_ftir_XGBoost_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Assess UV-Vis XGBoost Model on Test Data#
+
+
+#Predict uvvis test set
+test_uvvis_XGBoost<-predict(fit_XGBoost_uvvis,newdata=data_test_uvvis_cf)
+
+#get the confusion matrix
+cfmatrix_uvvis<-confusionMatrix(test_uvvis_XGBoost,data_test_uvvis_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_uvvis)
+
+
+
+knitr::kable(cfmatrix_uvvis$byClass)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_uvvis_XGBoost_table <- cfmatrix_uvvis$table
+TP <- cfmatrix_uvvis_XGBoost_table[1,1] 
+TN <- cfmatrix_uvvis_XGBoost_table[2,2] 
+FP <- cfmatrix_uvvis_XGBoost_table[2,1] 
+FN <- cfmatrix_uvvis_XGBoost_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+##### #Assess GC-MS XGBoost Model on Test Data#
+
+
+#Predict gc test set
+test_gc_XGBoost<-predict(fit_XGBoost_gc,newdata=data_test_gc_cf)
+
+#get the confusion matrix
+cfmatrix_gc<-confusionMatrix(test_gc_XGBoost,data_test_gc_cf$class_1)
+
+#print the confusion matrix
+print(cfmatrix_gc)
+
+
+
+knitr::kable(cfmatrix_gc$byClass)
+
+
+
+#Calculating Matthews Correlation Coefficient (MC)
+# Extracting the components of the confusion matrix
+cfmatrix_gc_XGBoost_table <- cfmatrix_gc$table
+TP <- cfmatrix_gc_XGBoost_table[1,1] 
+TN <- cfmatrix_gc_XGBoost_table[2,2] 
+FP <- cfmatrix_gc_XGBoost_table[2,1] 
+FN <- cfmatrix_gc_XGBoost_table[1,2] 
+
+# Calculating MCC
+MCC <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+
+# Printing the MCC value
+print(paste("The MCC value is for the model",MCC))
+
+
+Plot Confusion Matrix Tables for XGBoost Binary Classification Algorithm
+
+
+# Plotting the confusion matrix
+
+#HSI XGBoost confusion Matrix
+cf_hsi_XGBoost<-ggplot(data = as.data.frame(cfmatrix_hsi$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "white", high = "#99ccff", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix HSI XGBoost')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#Raman XGBoost confusion Matrix
+cf_raman_XGBoost<-ggplot(data = as.data.frame(cfmatrix_raman$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkorange3", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix Raman XGBoost')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#FTIR XGBoost confusion Matrix
+cf_ftir_XGBoost<-ggplot(data = as.data.frame(cfmatrix_ftir$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "gray84", high = "darkseagreen2", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix FTIR XGBoost')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+#UV-Vis XGBoost confusion Matrix
+cf_uvvis_XGBoost<-ggplot(data = as.data.frame(cfmatrix_uvvis$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "azure1", high = "turquoise", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix UV-Vis XGBoost')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+
+library(grid)
+grid.arrange(cf_hsi_XGBoost,cf_raman_XGBoost,cf_ftir_XGBoost,cf_uvvis_XGBoost,nrow = 2)
+
+
+
+#GC-MS XGBoost confusion Matrix
+ggplot(data = as.data.frame(cfmatrix_gc$table), aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = sprintf("%0.0f", Freq)), vjust = 1,color = "black",size = 4) +
+  scale_fill_gradient(low = "azure1", high = "tan1", name = "Frequency") +
+  theme_minimal() +
+  labs(x = "Actual Class", y = "Predicted Class", color = 'black',title = 'Confusion Matrix GC-MS XGBoost')+
+  theme(
+    legend.position =  "none",
+    axis.text.y = element_text(color = "black",size = 8),
+    axis.title.x  = element_text(size = 8),
+    axis.title.y = element_text(size = 8),aspect.ratio = 1,
+    plot.title = element_text(size = 8,hjust = 0.5))
+
+
+## Part IV. Regression Models: Prediction of Adulteration in Extra Virgin Oil
+
+-   This section employs supervised regression models to predict the levels of adulterants in olive oil.
+
+
+#HSI Regression data
+#we will use data reduced by PCA
+
+#set seed for reproducibility
+set.seed (123)
+
+hsi_reg<-hsi_new[,-1]
+train_index_hsi_reg<-createDataPartition(hsi_reg$perc_adulter,p = 0.7,list=FALSE)
+
+#split the data as train and test set
+data_train_hsi_reg<-hsi_reg[train_index_hsi_reg,]
+data_test_hsi_reg<-hsi_reg[-train_index_hsi_reg,]
+
+#Check the dimensions of the train and test set for HSI data
+
+dim(data_train_hsi_reg)
+dim(data_test_hsi_reg)
+
+
+
+#Raman Regression data
+
+#we will use data reduced by PCA
+
+#set seed for reproducibility
+set.seed (123)
+
+raman_reg<-raman_new[,-1]
+train_index_raman_reg<-createDataPartition(raman_reg$perc_adulter,p = 0.7,list=FALSE)
+
+#split the data as train and test set
+data_train_raman_reg<-raman_reg[train_index_raman_reg,]
+data_test_raman_reg<-raman_reg[-train_index_raman_reg,]
+
+#Check the dimensions of the train and test set for raman data
+
+dim(data_train_raman_reg)
+dim(data_test_raman_reg)
+
+
+
+#FTIR Regression data
+#set seed for reproducibility
+set.seed (123)
+
+ftir_reg<-ftir_new[,-1]
+train_index_ftir_reg<-createDataPartition(ftir_reg$perc_adulter,p = 0.7,list=FALSE)
+
+#split the data as train and test set
+data_train_ftir_reg<-ftir_reg[train_index_ftir_reg,]
+data_test_ftir_reg<-ftir_reg[-train_index_ftir_reg,]
+
+#Check the dimensions of the train and test set for ftir data
+
+dim(data_train_ftir_reg)
+dim(data_test_ftir_reg)
+
+
+
+#UV-VIS Regression data
+#set seed for reproducibility
+set.seed (123)
+
+uvvis_reg<-uvvis_new[,-1]
+train_index_uvvis_reg<-createDataPartition(uvvis_reg$perc_adulter,p = 0.7,list=FALSE)
+
+#split the data as train and test set
+data_train_uvvis_reg<-uvvis_reg[train_index_uvvis_reg,]
+data_test_uvvis_reg<-uvvis_reg[-train_index_uvvis_reg,]
+
+#Check the dimensions of the train and test set for uvvis data
+
+dim(data_train_uvvis_reg)
+dim(data_test_uvvis_reg)
+
+
+
+#GC-MS Regression data
+#set seed for reproducibility
+set.seed (123)
+
+gc_reg<-gc_new[,-1]
+train_index_gc_reg<-createDataPartition(gc_reg$perc_adulter,p = 0.7,list=FALSE)
+
+#split the data as train and test set
+data_train_gc_reg<-gc_reg[train_index_gc_reg,]
+data_test_gc_reg<-gc_reg[-train_index_gc_reg,]
+
+#Check the dimensions of the train and test set for gc data
+
+dim(data_train_gc_reg)
+dim(data_test_gc_reg)
+
+
+#### Set up parameters for training the model using 10 fold repeated 10 times stratified cross-validation.
+
+The optimum model will be selected using the one standard error rule (oneSE): selection of a model with root mean square error of prediction that is within one standard error of the best-performing model to minimize the risk of overfitting.
+
+
+# Set up the training control(10 folds 10 times cross_validation)
+control_r <- trainControl(method = "repeatedcv", number = 10, repeats = 10, 
+                          selectionFunction = 'oneSE')
+
+
+[*k-Nearest Neighbors (k-NN) Regression*]{.underline}
+
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+#start_time
+start_time<-Sys.time()
+
+#Set up grid for k neighbors
+grid_knn<-expand.grid(.k = seq(3,30, by =2))#Ensure k in as odd number to avoid ties on majority voting
+
+#Train k-NN models for all the techniques
+
+#HSI k-NN model
+fit_knn_hsi_reg<-train(perc_adulter~.,data=data_train_hsi_reg,
+                       method = "knn",tuneGrid = grid_knn,trControl = control_r,metric = "RMSE")
+
+#Raman k-NN model
+fit_knn_raman_reg<-train(y=data_train_raman_reg[,1],x=data_train_raman_reg[,-1],
+                         method = "knn",tuneGrid = grid_knn,trControl = control_r,metric = "RMSE")
+
+#FTIR k-NN model
+fit_knn_ftir_reg<-train(y=data_train_ftir_reg[,1],x=data_train_ftir_reg[,-1],
+                        method = "knn",tuneGrid = grid_knn,trControl = control_r,metric = "RMSE")
+
+#UV-Vis k-NN model
+fit_knn_uvvis_reg<-train(y=data_train_uvvis_reg[,1],x=data_train_uvvis_reg[,-1],
+                         method = "knn",tuneGrid = grid_knn,trControl = control_r,metric = "RMSE")
+#GC-MS k-NN model
+fit_knn_gc_reg<-train(y=data_train_gc_reg[,1],x=data_train_gc_reg[,-1],
+                      method = "knn",tuneGrid = grid_knn,trControl = control_r,metric = "RMSE")
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+stopCluster(cl)#stop the parallel run cluster
+
+
+### Plot Hyperparameter for Model kNN Regression Model Selection
+
+
+#HSI kNN Regression CV Plot
+p1_knnr_hsi<-ggplot(fit_knn_hsi_reg)+geom_line(colour = "red")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='HSI kNN Regression Model Training',y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black"),
+        aspect.ratio = 1)
+
+#Raman kNN Regression CV Plot
+p2_knnr_raman<-ggplot(fit_knn_raman_reg)+geom_line(colour = "blue")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='Raman kNN Regression Model Training',y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size = 8),
+        aspect.ratio = 1)
+
+#FTIR kNN Regression CV Plot
+p3_knnr_ftir<-ggplot(fit_knn_ftir_reg)+geom_line(colour = "black")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='FTIR kNN Regression Model Training', y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size = 8),
+        aspect.ratio = 1)
+
+#UV-Vis kNN Regression CV Plot
+p4_knnr_uvvis<-ggplot(fit_knn_uvvis_reg)+geom_line(colour = "black",linetype = 'dashed')+ 
+  theme_bw()+geom_point(pch = 4)+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='UV-Vis kNN Regression Model Training',y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size =8),
+        aspect.ratio = 1)
+
+
+
+#Arrange the kNN CV Plots
+gridExtra::grid.arrange(p1_knnr_hsi,p2_knnr_raman,p3_knnr_ftir,p4_knnr_uvvis,nrow = 2)
+
+
+
+#GC kNN Regression CV Plot
+ggplot(fit_knn_gc_reg)+geom_line(colour = "black",linetype = 'dashed')+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='GC-MS kNN Regression Model Training',y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size =8),
+        aspect.ratio = 1)
+
+
+#Display cross-validation results for kNN CV models
+
+
+#HSI CV results
+print(paste('The optimal number of k for training the HSI-kNN regression model is',fit_knn_hsi_reg$bestTune))
+
+#Output table
+knitr::kable(fit_knn_hsi_reg$results)
+
+#The optimal selected model
+selected_model<-fit_knn_hsi_reg$results %>% filter(k==as.numeric(fit_knn_hsi_reg$bestTune))
+knitr::kable(selected_model)
+
+
+
+#Raman CV results
+print(paste('The optimal number of k for training the Raman-kNN regression model is',fit_knn_raman_reg$bestTune))
+
+#Output table
+knitr::kable(fit_knn_raman_reg$results)
+
+#The optimal selected model
+selected_model<-fit_knn_raman_reg$results %>% filter(k==as.numeric(fit_knn_raman_reg$bestTune))
+knitr::kable(selected_model)
+
+
+
+#FTIR CV results
+print(paste('The optimal number of k for training the ftir-kNN regression model is',fit_knn_ftir_reg$bestTune))
+
+#Output table
+knitr::kable(fit_knn_ftir_reg$results)
+
+#The optimal selected model
+selected_model<-fit_knn_ftir_reg$results %>% filter(k==as.numeric(fit_knn_ftir_reg$bestTune))
+knitr::kable(selected_model)
+
+
+
+#Uv_Vis CV results
+print(paste('The optimal number of k for training the uvvis-kNN regression model is',fit_knn_uvvis_reg$bestTune))
+
+#Output table
+knitr::kable(fit_knn_uvvis_reg$results)
+
+#The optimal selected model
+selected_model<-fit_knn_uvvis_reg$results %>% filter(k==as.numeric(fit_knn_uvvis_reg$bestTune))
+knitr::kable(selected_model)
+
+
+
+#GC-MS CV results
+print(paste('The optimal number of k for training the gc-kNN regression model is',fit_knn_gc_reg$bestTune))
+
+#Output table
+knitr::kable(fit_knn_gc_reg$results)
+
+#The optimal selected model
+selected_model<-fit_knn_gc_reg$results %>% filter(k==as.numeric(fit_knn_gc_reg$bestTune))
+knitr::kable(selected_model)
+
+
+#### Testing HSI kNN Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from HSI
+
+prediction_knnr_hsi<-predict(fit_knn_hsi_reg,newdata = data_test_hsi_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_knnr_hsi <- postResample(prediction_knnr_hsi,data_test_hsi_reg$perc_adulter)
+print(results_knnr_hsi)
+
+RMSE<-results_knnr_hsi[1]
+Rsquared<-results_knnr_hsi[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_hsi_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the kNN HSI model is',round(RPD,2)))
+
+
+#### Testing Raman kNN Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from Raman 
+
+prediction_knnr_raman<-predict(fit_knn_raman_reg,newdata = data_test_raman_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_knnr_raman <- postResample(prediction_knnr_raman,data_test_raman_reg$perc_adulter)
+print(results_knnr_raman)
+
+RMSE<-results_knnr_raman[1]
+Rsquared<-results_knnr_raman[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_raman_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the kNN raman model is',round(RPD,2)))
+
+
+#### Testing FTIR kNN Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from FTIR
+
+prediction_knnr_ftir<-predict(fit_knn_ftir_reg,newdata = data_test_ftir_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_knnr_ftir <- postResample(prediction_knnr_ftir,data_test_ftir_reg$perc_adulter)
+print(results_knnr_ftir)
+
+RMSE<-results_knnr_ftir[1]
+Rsquared<-results_knnr_ftir[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_ftir_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the kNN ftir model is',round(RPD,2)))
+
+
+#### Testing UV-Vis kNN Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from UV-Vis
+
+prediction_knnr_uvvis<-predict(fit_knn_uvvis_reg,newdata = data_test_uvvis_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_knnr_uvvis <- postResample(prediction_knnr_uvvis,data_test_uvvis_reg$perc_adulter)
+print(results_knnr_uvvis)
+
+RMSE<-results_knnr_uvvis[1]
+Rsquared<-results_knnr_uvvis[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_uvvis_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the kNN uvvis model is',round(RPD,2)))
+
+
+#### Testing GC-MS kNN Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from GC-MS
+
+prediction_knnr_gc<-predict(fit_knn_gc_reg,newdata = data_test_gc_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_knnr_gc <- postResample(prediction_knnr_gc,data_test_gc_reg$perc_adulter)
+print(results_knnr_gc)
+
+RMSE<-results_knnr_gc[1]
+Rsquared<-results_knnr_gc[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_gc_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the kNN gc model is',round(RPD,2)))
+
+
+[*Random Forest (RF) Regression*]{.underline}
+
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+#start_time
+start_time<-Sys.time()
+
+#Use tuneLength to find the optimal number of mtry: set to 6
+
+#Train RF models for all the techniques
+
+#HSI RF model
+fit_rf_hsi_reg<-train(perc_adulter~.,data=data_train_hsi_reg,
+                      method = "rf",tuneLength = 4,trControl = control_r,metric = "RMSE")
+
+#Raman RF model
+fit_rf_raman_reg<-train(y=data_train_raman_reg[,1],x=data_train_raman_reg[,-1],
+                        method = "rf",tuneLength = 4,trControl = control_r,metric = "RMSE")
+
+#FTIR RF model
+fit_rf_ftir_reg<-train(y=data_train_ftir_reg[,1],x=data_train_ftir_reg[,-1],
+                       method = "rf",tuneLength = 4,trControl = control_r,metric = "RMSE")
+
+#UV-Vis RF model
+fit_rf_uvvis_reg<-train(y=data_train_uvvis_reg[,1],x=data_train_uvvis_reg[,-1],
+                        method = "rf",tuneLength = 4,trControl = control_r,metric = "RMSE")
+#GC-MS RF model
+fit_rf_gc_reg<-train(y=data_train_gc_reg[,1],x=data_train_gc_reg[,-1],
+                     method = "rf",tuneLength = 4,trControl = control_r,metric = "RMSE")
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+stopCluster(cl)#stop the parallel run cluster
+
+
+### Plot Hyperparameter for RF Regression Model Selection
+
+
+#HSI kNN Regression CV Plot
+p1_rfr_hsi<-ggplot(fit_rf_hsi_reg)+geom_line(colour = "red")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='HSI RF Regression Model Training',y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black"),
+        aspect.ratio = 1)
+
+#Raman RF Regression CV Plot
+p2_rfr_raman<-ggplot(fit_rf_raman_reg)+geom_line(colour = "blue")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='Raman RF Regression Model Training',y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size = 8),
+        aspect.ratio = 1)
+
+#FTIR rf Regression CV Plot
+p3_rfr_ftir<-ggplot(fit_rf_ftir_reg)+geom_line(colour = "black")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='FTIR RF Regression Model Training', y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size = 8),
+        aspect.ratio = 1)
+
+#UV-Vis rf Regression CV Plot
+p4_rfr_uvvis<-ggplot(fit_rf_uvvis_reg)+geom_line(colour = "black",linetype = 'dashed')+ 
+  theme_bw()+geom_point(pch = 4)+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='UV-Vis RF Regression Model Training',y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size =8),
+        aspect.ratio = 1)
+
+
+
+#Arrange the rf CV Plots
+gridExtra::grid.arrange(p1_rfr_hsi,p2_rfr_raman,p3_rfr_ftir,p4_rfr_uvvis,nrow = 2)
+
+
+
+#GC RF Regression CV Plot
+ggplot(fit_rf_gc_reg)+geom_line(colour = "black",linetype = 'dashed')+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='GC-MS RF Regression Model Training',y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size =8),
+        aspect.ratio = 1)
+
+
+#Display cross-validation results for RF Regression CV models
+
+
+#HSI CV results
+print(paste('The optimal number of mtry for training the HSI-RF regression model is',fit_rf_hsi_reg$bestTune))
+
+#Output table
+knitr::kable(fit_rf_hsi_reg$results)
+
+#The optimal selected model
+selected_model<-fit_rf_hsi_reg$results %>% filter(mtry==as.numeric(fit_rf_hsi_reg$bestTune))
+knitr::kable(selected_model)
+
+
+
+#Raman CV results
+print(paste('The optimal number of mtry for training the Raman-RF regression model is',fit_rf_raman_reg$bestTune))
+
+#Output table
+knitr::kable(fit_rf_raman_reg$results)
+
+#The optimal selected model
+selected_model<-fit_rf_raman_reg$results %>% filter(mtry==as.numeric(fit_rf_raman_reg$bestTune))
+knitr::kable(selected_model)
+
+
+
+#FTIR CV results
+print(paste('The optimal number of mtry for training the FTIR-RF regression model is',fit_rf_ftir_reg$bestTune))
+
+#Output table
+knitr::kable(fit_rf_ftir_reg$results)
+
+#The optimal selected model
+selected_model<-fit_rf_ftir_reg$results %>% filter(mtry==as.numeric(fit_rf_ftir_reg$bestTune))
+knitr::kable(selected_model)
+
+
+
+#Uv_Vis CV results
+print(paste('The optimal number of mtry for training the uvvis-RF regression model is',fit_rf_uvvis_reg$bestTune))
+
+#Output table
+knitr::kable(fit_rf_uvvis_reg$results)
+
+#The optimal selected model
+selected_model<-fit_rf_uvvis_reg$results %>% filter(mtry==as.numeric(fit_rf_uvvis_reg$bestTune))
+knitr::kable(selected_model)
+
+
+
+#GC-MS CV results
+print(paste('The optimal number of mtry for training the GC-RF regression model is',fit_rf_gc_reg$bestTune))
+
+#Output table
+knitr::kable(fit_rf_gc_reg$results)
+
+#The optimal selected model
+selected_model<-fit_rf_gc_reg$results %>% filter(mtry==as.numeric(fit_rf_gc_reg$bestTune))
+knitr::kable(selected_model)
+
+
+#### Testing HSI RF Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from HSI
+
+prediction_rfr_hsi<-predict(fit_rf_hsi_reg,newdata = data_test_hsi_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_rfr_hsi <- postResample(prediction_rfr_hsi,data_test_hsi_reg$perc_adulter)
+print(results_rfr_hsi)
+
+RMSE<-results_rfr_hsi[1]
+Rsquared<-results_rfr_hsi[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_hsi_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the rf HSI model is',round(RPD,2)))
+
+
+#### Testing Raman RF Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from Raman 
+
+prediction_knnr_raman<-predict(fit_knn_raman_reg,newdata = data_test_raman_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_knnr_raman <- postResample(prediction_knnr_raman,data_test_raman_reg$perc_adulter)
+print(results_knnr_raman)
+
+RMSE<-results_knnr_raman[1]
+Rsquared<-results_knnr_raman[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_raman_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the kNN raman model is',round(RPD,2)))
+
+
+#### Testing FTIR kNN Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from FTIR
+
+prediction_rfr_ftir<-predict(fit_rf_ftir_reg,newdata = data_test_ftir_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_rfr_ftir <- postResample(prediction_rfr_ftir,data_test_ftir_reg$perc_adulter)
+print(results_rfr_ftir)
+
+RMSE<-results_rfr_ftir[1]
+Rsquared<-results_rfr_ftir[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_ftir_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the rf ftir model is',round(RPD,2)))
+
+
+#### Testing UV-Vis RF Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from UV-Vis
+
+prediction_rfr_uvvis<-predict(fit_rf_uvvis_reg,newdata = data_test_uvvis_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_rfr_uvvis <- postResample(prediction_rfr_uvvis,data_test_uvvis_reg$perc_adulter)
+print(results_rfr_uvvis)
+
+RMSE<-results_rfr_uvvis[1]
+Rsquared<-results_rfr_uvvis[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_uvvis_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the rf uvvis model is',round(RPD,2)))
+
+
+#### Testing GC-MS kNN Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from GC-MS
+
+prediction_rfr_gc<-predict(fit_rf_gc_reg,newdata = data_test_gc_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_rfr_gc <- postResample(prediction_rfr_gc,data_test_gc_reg$perc_adulter)
+print(results_rfr_gc)
+
+RMSE<-results_rfr_gc[1]
+Rsquared<-results_rfr_gc[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_gc_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the rf gc model is',round(RPD,2)))
+
+
+[*Support Vector Machine Regression (Radial Basis)*]{.underline}
+
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+#start_time
+start_time<-Sys.time()
+
+#Set up tuneLength for optimal Cost and sigma for the RBF kernel
+
+#Train SVM  models for all the techniques
+
+#HSI SVM Regression model
+fit_svm_hsi_reg<-train(perc_adulter~.,data=data_train_hsi_reg,
+                       method = "svmRadial",tuneLength = 10,trControl = control_r,metric = "RMSE")
+
+#Raman SVM Regression model
+fit_svm_raman_reg<-train(perc_adulter~.,data=data_train_raman_reg,
+                         method = "svmRadial",tuneLength = 10,trControl = control_r,metric = "RMSE")
+
+#FTIR SVM Regression model
+fit_svm_ftir_reg<-train(perc_adulter~.,data=data_train_ftir_reg,
+                        method = "svmRadial",tuneLength = 10,trControl = control_r,metric = "RMSE")
+
+#UV-Vis SVM Regression model
+fit_svm_uvvis_reg<-train(perc_adulter~.,data=data_train_uvvis_reg,
+                         method = "svmRadial",tuneLength = 10,trControl = control_r,metric = "RMSE")
+#GC-MS SVM Regression model
+fit_svm_gc_reg<-train(perc_adulter~.,data=data_train_gc_reg,
+                      method = "svmRadial",tuneLength = 10,trControl = control_r,metric = "RMSE")
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+stopCluster(cl)#stop the parallel run cluster
+
+
+### Plot Hyperparameter for SVM Regression Model Selection
+
+
+#HSI SVM Regression CV Plot
+p1_svmr_hsi<-ggplot(fit_svm_hsi_reg)+geom_line(colour = "red")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='HSI SVM Regression Model Training',y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black"),
+        aspect.ratio = 1)
+
+#Raman SVM Regression CV Plot
+p2_svmr_raman<-ggplot(fit_svm_raman_reg)+geom_line(colour = "blue")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='Raman SVM Regression Model Training',y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size = 8),
+        aspect.ratio = 1)
+
+#FTIR SVM Regression CV Plot
+p3_svmr_ftir<-ggplot(fit_svm_ftir_reg)+geom_line(colour = "black")+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='FTIR SVM Regression Model Training', y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size = 8),
+        aspect.ratio = 1)
+
+#UV-Vis SVM Regression CV Plot
+p4_svmr_uvvis<-ggplot(fit_svm_uvvis_reg)+geom_line(colour = "black",linetype = 'dashed')+ 
+  theme_bw()+geom_point(pch = 4)+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='UV-Vis SVM Regression Model Training',y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size =8),
+        aspect.ratio = 1)
+
+
+
+#Arrange the svm CV Plots
+gridExtra::grid.arrange(p1_svmr_hsi,p2_svmr_raman,p3_svmr_ftir,p4_svmr_uvvis,nrow = 2)
+
+
+
+#GC SVM Regression CV Plot
+ggplot(fit_svm_gc_reg)+geom_line(colour = "black",linetype = 'dashed')+ 
+  theme_bw()+
+  theme(
+    panel.grid = element_blank())+
+  labs(title ='GC-MS SVM Regression Model Training',y = "RMSECV")+
+  theme(plot.title = element_text(hjust = 0.5,size = 8),
+        axis.title = element_text(size =8),
+        axis.text = element_text(colour = "black",size =8),
+        aspect.ratio = 1)
+
+
+#Display cross-validation results for SVM Regression CV models
+
+
+#HSI CV results
+print(paste('The optimal number of parameters for training the HSI-SVMR regression model are',fit_svm_hsi_reg$bestTune$C, "as Cost", "and the sigma as",round(fit_svm_hsi_reg$bestTune$sigma,2)))
+
+#Output table
+knitr::kable(fit_svm_hsi_reg$results)
+
+#The optimal selected model
+selected_model<-fit_svm_hsi_reg$results %>% filter(sigma == as.numeric(fit_svm_hsi_reg$bestTune$sigma) &  C == as.numeric(fit_svm_hsi_reg$bestTune$C))
+knitr::kable(selected_model)
+
+
+
+#Raman CV results
+print(paste('The optimal number of parameters for training the raman-SVMR regression model are',fit_svm_raman_reg$bestTune$C, "as Cost", "and the sigma as",round(fit_svm_raman_reg$bestTune$sigma,2)))
+
+#Output table
+knitr::kable(fit_svm_raman_reg$results)
+
+#The optimal selected model
+selected_model<-fit_svm_raman_reg$results %>% filter(sigma == as.numeric(fit_svm_raman_reg$bestTune$sigma) &  C == as.numeric(fit_svm_raman_reg$bestTune$C))
+knitr::kable(selected_model)
+
+
+
+#FTIR CV results
+print(paste('The optimal number of parameters for training the ftir-SVMR regression model are',fit_svm_ftir_reg$bestTune$C, "as Cost", "and the sigma as",round(fit_svm_ftir_reg$bestTune$sigma,2)))
+
+#Output table
+knitr::kable(fit_svm_ftir_reg$results)
+
+#The optimal selected model
+selected_model<-fit_svm_ftir_reg$results %>% filter(sigma == as.numeric(fit_svm_ftir_reg$bestTune$sigma) &  C == as.numeric(fit_svm_ftir_reg$bestTune$C))
+knitr::kable(selected_model)
+
+
+
+#UV-Vis CV results
+print(paste('The optimal number of parameters for training the uvvis-SVMR regression model are',fit_svm_uvvis_reg$bestTune$C, "as Cost", "and the sigma as",round(fit_svm_uvvis_reg$bestTune$sigma,2)))
+
+#Output table
+knitr::kable(fit_svm_uvvis_reg$results)
+
+#The optimal selected model
+selected_model<-fit_svm_uvvis_reg$results %>% filter(sigma == as.numeric(fit_svm_uvvis_reg$bestTune$sigma) &  C == as.numeric(fit_svm_uvvis_reg$bestTune$C))
+knitr::kable(selected_model)
+
+
+
+#GC-MS CV results
+print(paste('The optimal number of parameters for training the gc-SVMR regression model are',fit_svm_gc_reg$bestTune$C, "as Cost", "and the sigma as",round(fit_svm_gc_reg$bestTune$sigma,2)))
+
+#Output table
+knitr::kable(fit_svm_gc_reg$results)
+
+#The optimal selected model
+selected_model<-fit_svm_gc_reg$results %>% filter(sigma == as.numeric(fit_svm_gc_reg$bestTune$sigma) &  C == as.numeric(fit_svm_gc_reg$bestTune$C))
+knitr::kable(selected_model)
+
+
+#### Testing HSI SVM Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from HSI
+
+prediction_svmr_hsi<-predict(fit_svm_hsi_reg,newdata = data_test_hsi_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_svmr_hsi <- postResample(prediction_svmr_hsi,data_test_hsi_reg$perc_adulter)
+print(results_svmr_hsi)
+
+RMSE<-results_svmr_hsi[1]
+Rsquared<-results_svmr_hsi[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_hsi_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the SVM HSI model is',round(RPD,2)))
+
+
+#### Testing Raman SVM Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from Raman
+
+prediction_svmr_raman<-predict(fit_svm_raman_reg,newdata = data_test_raman_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_svmr_raman <- postResample(prediction_svmr_raman,data_test_raman_reg$perc_adulter)
+print(results_svmr_raman)
+
+RMSE<-results_svmr_raman[1]
+Rsquared<-results_svmr_raman[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_raman_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the svm raman model is',round(RPD,2)))
+
+
+#### Testing FTIR SVM Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from FTIR
+
+prediction_svmr_ftir<-predict(fit_svm_ftir_reg,newdata = data_test_ftir_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_svmr_ftir <- postResample(prediction_svmr_ftir,data_test_ftir_reg$perc_adulter)
+print(results_svmr_ftir)
+
+RMSE<-results_svmr_ftir[1]
+Rsquared<-results_svmr_ftir[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_ftir_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the svm ftir model is',round(RPD,2)))
+
+
+#### Testing UV-Vis SVM Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from UV-Vis
+
+prediction_svmr_uvvis<-predict(fit_svm_uvvis_reg,newdata = data_test_uvvis_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_svmr_uvvis <- postResample(prediction_svmr_uvvis,data_test_uvvis_reg$perc_adulter)
+print(results_svmr_uvvis)
+
+RMSE<-results_svmr_uvvis[1]
+Rsquared<-results_svmr_uvvis[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_uvvis_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the svm uvvis model is',round(RPD,2)))
+
+
+#### Testing GC-MS SVM Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from GC-MS
+
+prediction_svmr_gc<-predict(fit_svm_gc_reg,newdata = data_test_gc_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_svmr_gc <- postResample(prediction_svmr_gc,data_test_gc_reg$perc_adulter)
+print(results_svmr_gc)
+
+RMSE<-results_svmr_gc[1]
+Rsquared<-results_svmr_gc[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_gc_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the svm gc model is',round(RPD,2)))
+
+
+[*Multiple Linear Regression/Principal Component Regression*]{.underline}
+
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+#start_time
+start_time<-Sys.time()
+
+#Train PCR  models for all the techniques
+
+#HSI PC Regression model
+fit_lm_hsi_reg<-train(perc_adulter~.,data=data_train_hsi_reg,
+                      method = "lm",trControl = control_r,metric = "RMSE")
+
+#Raman PC Regression model
+fit_lm_raman_reg<-train(perc_adulter~.,data=data_train_raman_reg,
+                        method = "lm",trControl = control_r,metric = "RMSE")
+
+#FTIR PC Regression model
+fit_lm_ftir_reg<-train(perc_adulter~.,data=data_train_ftir_reg,
+                       method = "lm",trControl = control_r,metric = "RMSE")
+
+#UV-Vis PC Regression model
+fit_lm_uvvis_reg<-train(perc_adulter~.,data=data_train_uvvis_reg,
+                        method = "lm",trControl = control_r,metric = "RMSE")
+#GC-MS PC Regression model
+fit_lm_gc_reg<-train(perc_adulter~.,data=data_train_gc_reg,
+                     method = "lm",trControl = control_r,metric = "RMSE")
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+stopCluster(cl)#stop the parallel run cluster
+
+
+#Display cross-validation results for MLR/PCR n CV models
+
+
+#HSI CV results
+knitr::kable(fit_lm_hsi_reg$results)
+
+
+
+#Raman CV results
+knitr::kable(fit_lm_raman_reg$results)
+
+
+
+#FTIR CV results
+knitr::kable(fit_lm_ftir_reg$results)
+
+
+
+#UV-VIS CV results
+knitr::kable(fit_lm_uvvis_reg$results)
+
+
+
+#GC CV results
+knitr::kable(fit_lm_gc_reg$results)
+
+
+#### Testing HSI MLR/PC Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from HSI
+
+prediction_lmr_hsi<-predict(fit_lm_hsi_reg,newdata = data_test_hsi_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_lmr_hsi <- postResample(prediction_lmr_hsi,data_test_hsi_reg$perc_adulter)
+print(results_lmr_hsi)
+
+RMSE<-results_lmr_hsi[1]
+Rsquared<-results_lmr_hsi[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_hsi_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the lm HSI model is',round(RPD,2)))
+
+
+#### Testing Ramna MLR/PC Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from Raman
+
+prediction_lmr_raman<-predict(fit_lm_raman_reg,newdata = data_test_raman_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_lmr_raman <- postResample(prediction_lmr_raman,data_test_raman_reg$perc_adulter)
+print(results_lmr_raman)
+
+RMSE<-results_lmr_raman[1]
+Rsquared<-results_lmr_raman[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_raman_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the lm raman model is',round(RPD,2)))
+
+
+#### Testing FTIR MLR/PC Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from FTIR
+
+prediction_lmr_ftir<-predict(fit_lm_ftir_reg,newdata = data_test_ftir_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_lmr_ftir <- postResample(prediction_lmr_ftir,data_test_ftir_reg$perc_adulter)
+print(results_lmr_ftir)
+
+RMSE<-results_lmr_ftir[1]
+Rsquared<-results_lmr_ftir[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_ftir_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the lm ftir model is',round(RPD,2)))
+
+
+#### Testing uvvis MLR/PC Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from UVVIS
+
+prediction_lmr_uvvis<-predict(fit_lm_uvvis_reg,newdata = data_test_hsi_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_lmr_uvvis <- postResample(prediction_lmr_uvvis,data_test_uvvis_reg$perc_adulter)
+print(results_lmr_uvvis)
+
+RMSE<-results_lmr_uvvis[1]
+Rsquared<-results_lmr_uvvis[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_uvvis_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the lm uvvis model is',round(RPD,2)))
+
+
+#### Testing GC-MS MLR/PC Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from GC
+
+prediction_lmr_gc<-predict(fit_lm_gc_reg,newdata = data_test_gc_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_lmr_gc <- postResample(prediction_lmr_gc,data_test_gc_reg$perc_adulter)
+print(results_lmr_gc)
+
+RMSE<-results_lmr_gc[1]
+Rsquared<-results_lmr_gc[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_gc_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the lm gc model is',round(RPD,2)))
+
+
+[*XGBoost Regression*]{.underline}
+
+
+#Register cluster for caret to train the models in parallel
+cl<-makeCluster(6,type = "SOCK")
+suppressWarnings(suppressMessages(
+  registerDoSNOW(cl)))
+
+#start_time
+start_time<-Sys.time()
+
+#Train XGBoost  models for all the techniques
+
+#HSI XGBoost Regression model
+fit_XGBoost_hsi_reg<-train(perc_adulter~.,data=data_train_hsi_reg,
+                           method = "xgbTree",tuneLength = 10, trControl = control_r,metric = "RMSE")
+
+#Raman XGBoost Regression model
+fit_XGBoost_raman_reg<-train(perc_adulter~.,data=data_train_raman_reg,
+                             method = "xgbTree",tuneLength = 10,trControl = control_r,metric = "RMSE")
+
+#FTIR XGBoost Regression model
+fit_XGBoost_ftir_reg<-train(perc_adulter~.,data=data_train_ftir_reg,
+                            method = "xgbTree",tuneLength = 10,trControl = control_r,metric = "RMSE")
+
+#UV-Vis XGBoost Regression model
+fit_XGBoost_uvvis_reg<-train(perc_adulter~.,data=data_train_uvvis_reg,
+                             method = "xgbTree",tuneLength = 10,trControl = control_r,metric = "RMSE")
+#GC-MS XGBoost Regression model
+fit_XGBoost_gc_reg<-train(perc_adulter~.,data=data_train_gc_reg,
+                          method = "xgbTree",tuneLength = 10,trControl = control_r,metric = "RMSE")
+#End_time
+end_time<-Sys.time()
+model_training_time<-end_time-start_time
+stopCluster(cl)#stop the parallel run cluster
+
+
+
+print(paste('Time taken to run the XGBoost models is',round(model_training_time,2), 'hours'))
+
+
+#Arrange the XGBoost training model plots for regression
+
+
+##HSI XGBoost Parameter Tuning Plot
+ggplot(fit_XGBoost_hsi_reg$results, aes(x = nrounds, y = RMSE, color = factor(max_depth), shape = factor(eta))) +
+  geom_point(size = 3) +
+  facet_grid(gamma ~ colsample_bytree) +
+  labs(title = "Hyperparameter Tuning HSI Results",
+       x = "Number of Rounds",
+       y = "RMSECV",
+       color = "Max Depth",
+       shape = "Eta") +
+  theme_bw()+
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 10),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.text = element_text(colour = "black",size=10),
+    axis.title = element_text(colour = "black",size=10),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size=10),
+    aspect.ratio = 1
+  )
+
+
+
+##RamanXGBoost Parameter Tuning Plot
+ggplot(fit_XGBoost_raman_reg$results, aes(x = nrounds, y = RMSE, color = factor(max_depth), shape = factor(eta))) +
+  geom_point(size = 3) +
+  facet_grid(gamma ~ colsample_bytree) +
+  labs(title = "Hyperparameter Tuning Raman Results",
+       x = "Number of Rounds",
+       y = "RMSECV",
+       color = "Max Depth",
+       shape = "Eta") +
+  theme_bw()+
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 10),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.text = element_text(colour = "black",size=10),
+    axis.title = element_text(colour = "black",size=10),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size=10),
+    aspect.ratio = 1
+  )
+
+
+
+##FTIR XGBoost Parameter Tuning Plot
+ggplot(fit_XGBoost_ftir_reg$results, aes(x = nrounds, y = RMSE, color = factor(max_depth), shape = factor(eta))) +
+  geom_point(size = 3) +
+  facet_grid(gamma ~ colsample_bytree) +
+  labs(title = "Hyperparameter Tuning FTIR Results",
+       x = "Number of Rounds",
+       y = "RMSECV",
+       color = "Max Depth",
+       shape = "Eta") +
+  theme_bw()+
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 10),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.text = element_text(colour = "black",size=10),
+    axis.title = element_text(colour = "black",size=10),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size=10),
+    aspect.ratio = 1
+  )
+
+
+
+##UV-VIS XGBoost Parameter Tuning Plot
+ggplot(fit_XGBoost_uvvis_reg$results, aes(x = nrounds, y = RMSE, color = factor(max_depth), shape = factor(eta))) +
+  geom_point(size = 3) +
+  facet_grid(gamma ~ colsample_bytree) +
+  labs(title = "Hyperparameter Tuning UVVIS Results",
+       x = "Number of Rounds",
+       y = "RMSECV",
+       color = "Max Depth",
+       shape = "Eta") +
+  theme_bw()+
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 10),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.text = element_text(colour = "black",size=10),
+    axis.title = element_text(colour = "black",size=10),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size=10),
+    aspect.ratio = 1
+  )
+
+
+
+##GC-MS XGBoost Parameter Tuning Plot
+ggplot(fit_XGBoost_gc_reg$results, aes(x = nrounds, y = RMSE, color = factor(max_depth), shape = factor(eta))) +
+  geom_point(size = 3) +
+  facet_grid(gamma ~ colsample_bytree) +
+  labs(title = "Hyperparameter Tuning GC-MS Results",
+       x = "Number of Rounds",
+       y = "RMSECV",
+       color = "Max Depth",
+       shape = "Eta") +
+  theme_bw()+
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 10),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.text = element_text(colour = "black",size=10),
+    axis.title = element_text(colour = "black",size=10),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size=10),
+    aspect.ratio = 1
+  )
+
+
+##Display XGBoost Regression cross-validation results#
+  
+  
+#HSI XGBoost CV results
+print(paste('The optimal parameters for training the HSI-XGBoost model are',
+            as.numeric(fit_XGBoost_hsi_reg$bestTune$nrounds),'nrounds,', 
+            'max_depth of',as.numeric(fit_XGBoost_hsi_reg$bestTune$max_depth),',',
+            'eta-value of',as.numeric(fit_XGBoost_hsi_reg$bestTune$eta),',',
+            'gamma value of',as.numeric(fit_XGBoost_hsi_reg$bestTune$gamma),',',
+            'colsample_bytree value of',as.numeric(fit_XGBoost_hsi_reg$bestTune$colsample_bytree),',',
+            'min_child_weight of',as.numeric(fit_XGBoost_hsi_reg$bestTune$min_child_weight), ',',
+            'and subsample value of', as.numeric(fit_XGBoost_hsi_reg$bestTune$subsample)))
+
+
+
+#Output HSI XGBoost table
+knitr::kable(fit_XGBoost_hsi_reg$results)
+
+#The optimal selected model
+
+# Extract best tuning parameters from the XGBoost model fit
+best_params <- fit_XGBoost_hsi_reg$bestTune
+
+# Filter the model with the best tuning parameters
+selected_model <- fit_XGBoost_hsi_reg$results %>%
+  filter(
+    nrounds == best_params$nrounds &
+      max_depth == best_params$max_depth &
+      eta == best_params$eta &
+      gamma == best_params$gamma &
+      colsample_bytree == best_params$colsample_bytree &
+      min_child_weight == best_params$min_child_weight &
+      subsample == best_params$subsample
+  )
+knitr::kable(selected_model)
+
+
+
+#Raman XGBoost CV results
+print(paste('The optimal parameters for training the raman-XGBoost model are',
+            as.numeric(fit_XGBoost_raman_reg$bestTune$nrounds),'nrounds,', 
+            'max_depth of',as.numeric(fit_XGBoost_raman_reg$bestTune$max_depth),',',
+            'eta-value of',as.numeric(fit_XGBoost_raman_reg$bestTune$eta),',',
+            'gamma value of',as.numeric(fit_XGBoost_raman_reg$bestTune$gamma),',',
+            'colsample_bytree value of',as.numeric(fit_XGBoost_raman_reg$bestTune$colsample_bytree),',',
+            'min_child_weight of',as.numeric(fit_XGBoost_raman_reg$bestTune$min_child_weight), ',',
+            'and subsample value of', as.numeric(fit_XGBoost_raman_reg$bestTune$subsample)))
+
+
+
+#Output Raman XGBoost table
+knitr::kable(fit_XGBoost_raman_reg$results)
+
+#The optimal selected model
+
+# Extract best tuning parameters from the XGBoost model fit
+best_params <- fit_XGBoost_raman_reg$bestTune
+
+# Filter the model with the best tuning parameters
+selected_model <- fit_XGBoost_raman_reg$results %>%
+  filter(
+    nrounds == best_params$nrounds &
+      max_depth == best_params$max_depth &
+      eta == best_params$eta &
+      gamma == best_params$gamma &
+      colsample_bytree == best_params$colsample_bytree &
+      min_child_weight == best_params$min_child_weight &
+      subsample == best_params$subsample
+  )
+knitr::kable(selected_model)
+
+
+
+#FTIR XGBoost CV results
+print(paste('The optimal parameters for training the ftir-XGBoost model are',
+            as.numeric(fit_XGBoost_ftir_reg$bestTune$nrounds),'nrounds,', 
+            'max_depth of',as.numeric(fit_XGBoost_ftir_reg$bestTune$max_depth),',',
+            'eta-value of',as.numeric(fit_XGBoost_ftir_reg$bestTune$eta),',',
+            'gamma value of',as.numeric(fit_XGBoost_ftir_reg$bestTune$gamma),',',
+            'colsample_bytree value of',as.numeric(fit_XGBoost_ftir_reg$bestTune$colsample_bytree),',',
+            'min_child_weight of',as.numeric(fit_XGBoost_ftir_reg$bestTune$min_child_weight), ',',
+            'and subsample value of', as.numeric(fit_XGBoost_ftir_reg$bestTune$subsample)))
+
+
+
+#Output FTIR XGBoost table
+knitr::kable(fit_XGBoost_ftir_reg$results)
+
+#The optimal selected model
+
+# Extract best tuning parameters from the XGBoost model fit
+best_params <- fit_XGBoost_ftir_reg$bestTune
+
+# Filter the model with the best tuning parameters
+selected_model <- fit_XGBoost_ftir_reg$results %>%
+  filter(
+    nrounds == best_params$nrounds &
+      max_depth == best_params$max_depth &
+      eta == best_params$eta &
+      gamma == best_params$gamma &
+      colsample_bytree == best_params$colsample_bytree &
+      min_child_weight == best_params$min_child_weight &
+      subsample == best_params$subsample
+  )
+knitr::kable(selected_model)
+
+
+
+#UV-Vis XGBoost CV results
+print(paste('The optimal parameters for training the uvvis-XGBoost model are',
+            as.numeric(fit_XGBoost_uvvis_reg$bestTune$nrounds),'nrounds,', 
+            'max_depth of',as.numeric(fit_XGBoost_uvvis_reg$bestTune$max_depth),',',
+            'eta-value of',as.numeric(fit_XGBoost_uvvis_reg$bestTune$eta),',',
+            'gamma value of',as.numeric(fit_XGBoost_uvvis_reg$bestTune$gamma),',',
+            'colsample_bytree value of',as.numeric(fit_XGBoost_uvvis_reg$bestTune$colsample_bytree),',',
+            'min_child_weight of',as.numeric(fit_XGBoost_uvvis_reg$bestTune$min_child_weight), ',',
+            'and subsample value of', as.numeric(fit_XGBoost_uvvis_reg$bestTune$subsample)))
+
+
+
+#Output UV-Vis XGBoost table
+knitr::kable(fit_XGBoost_uvvis_reg$results)
+
+#The optimal selected model
+
+# Extract best tuning parameters from the XGBoost model fit
+best_params <- fit_XGBoost_uvvis_reg$bestTune
+
+# Filter the model with the best tuning parameters
+selected_model <- fit_XGBoost_uvvis_reg$results %>%
+  filter(
+    nrounds == best_params$nrounds &
+      max_depth == best_params$max_depth &
+      eta == best_params$eta &
+      gamma == best_params$gamma &
+      colsample_bytree == best_params$colsample_bytree &
+      min_child_weight == best_params$min_child_weight &
+      subsample == best_params$subsample
+  )
+knitr::kable(selected_model)
+
+
+
+#GC-MS XGBoost CV results
+print(paste('The optimal parameters for training the gc-XGBoost model are',
+            as.numeric(fit_XGBoost_gc_reg$bestTune$nrounds),'nrounds,', 
+            'max_depth of',as.numeric(fit_XGBoost_gc_reg$bestTune$max_depth),',',
+            'eta-value of',as.numeric(fit_XGBoost_gc_reg$bestTune$eta),',',
+            'gamma value of',as.numeric(fit_XGBoost_gc_reg$bestTune$gamma),',',
+            'colsample_bytree value of',as.numeric(fit_XGBoost_gc_reg$bestTune$colsample_bytree),',',
+            'min_child_weight of',as.numeric(fit_XGBoost_gc_reg$bestTune$min_child_weight), ',',
+            'and subsample value of', as.numeric(fit_XGBoost_gc_reg$bestTune$subsample)))
+
+
+
+#Output GC-MS XGBoost table
+knitr::kable(fit_XGBoost_gc_reg$results)
+
+#The optimal selected model
+
+# Extract best tuning parameters from the XGBoost model fit
+best_params <- fit_XGBoost_gc_reg$bestTune
+
+# Filter the model with the best tuning parameters
+selected_model <- fit_XGBoost_gc_reg$results %>%
+  filter(
+    nrounds == best_params$nrounds &
+      max_depth == best_params$max_depth &
+      eta == best_params$eta &
+      gamma == best_params$gamma &
+      colsample_bytree == best_params$colsample_bytree &
+      min_child_weight == best_params$min_child_weight &
+      subsample == best_params$subsample
+  )
+knitr::kable(selected_model)
+
+
+#### Testing HSI XGBoost Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from HSI
+
+prediction_XGBoostr_hsi<-predict(fit_XGBoost_hsi_reg,newdata = data_test_hsi_reg)
+
+# Evaluate the model's performance with RMSEP and R²
+results_XGBoostr_hsi <- postResample(prediction_XGBoostr_hsi,data_test_hsi_reg$perc_adulter)
+print(results_XGBoostr_hsi)
+
+RMSE<-results_XGBoostr_hsi[1]
+Rsquared<-results_XGBoostr_hsi[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_hsi_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the rf HSI model is',round(RPD,2)))
+
+
+#### Testing Raman XGBoost Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from Raman 
+
+prediction_XGBoostr_raman<-predict(fit_XGBoost_raman_reg,newdata = data_test_raman_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_XGBoostr_raman <- postResample(prediction_XGBoostr_raman,data_test_raman_reg$perc_adulter)
+print(results_XGBoostr_raman)
+
+RMSE<-results_XGBoostr_raman[1]
+Rsquared<-results_XGBoostr_raman[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_raman_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the XGBoost raman model is',round(RPD,2)))
+
+
+#### Testing FTIR XGBoost Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from FTIR
+
+prediction_XGBoostr_ftir<-predict(fit_XGBoost_ftir_reg,newdata = data_test_ftir_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_XGBoostr_ftir <- postResample(prediction_XGBoostr_ftir,data_test_ftir_reg$perc_adulter)
+print(results_XGBoostr_ftir)
+
+RMSE<-results_XGBoostr_ftir[1]
+Rsquared<-results_XGBoostr_ftir[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_ftir_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the XGBoost ftir model is',round(RPD,2)))
+
+
+#### Testing UV-Vis XGBoost Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from UV-Vis
+
+prediction_XGBoostr_uvvis<-predict(fit_XGBoost_uvvis_reg,newdata = data_test_uvvis_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_XGBoostr_uvvis <- postResample(prediction_XGBoostr_uvvis,data_test_uvvis_reg$perc_adulter)
+print(results_XGBoostr_uvvis)
+
+RMSE<-results_XGBoostr_uvvis[1]
+Rsquared<-results_XGBoostr_uvvis[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_uvvis_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the XGBoost uvvis model is',round(RPD,2)))
+
+
+#### Testing GC-MS XGBoost Regression Models
+
+
+##Use the optimal model to predict the external samples
+
+#Predict the test set from GC-MS
+
+prediction_XGBoostr_gc<-predict(fit_XGBoost_gc_reg,newdata = data_test_gc_reg)
+
+# Evaluate the model's performance with RMSE and R²
+results_XGBoostr_gc <- postResample(prediction_XGBoostr_gc,data_test_gc_reg$perc_adulter)
+print(results_XGBoostr_gc)
+
+RMSE<-results_XGBoostr_gc[1]
+Rsquared<-results_XGBoostr_gc[2]
+print(paste('The RMSE is',round(RMSE,4), 'and the RSquared is', round(Rsquared,4)))
+
+#Calculate the Residual Predictive Deviation (RPD)
+
+# Calculate standard deviation of observed values
+sd_observed <- sd(data_test_gc_reg$perc_adulter)
+
+#Calculate RPD
+RPD <- sd_observed/RMSE
+
+print(paste('The RPD value of the XGBoost gc model is',round(RPD,2)))
+
